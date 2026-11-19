@@ -10,6 +10,9 @@ internal sealed interface ComandoRobot {
     data object CerrarYTrabar : ComandoRobot
     data object ConfirmarRetiro : ComandoRobot
     data object AlternarRechazo : ComandoRobot
+    data object CortarEnlace : ComandoRobot
+    data object RecuperarEnlace : ComandoRobot
+    data object ProbarDesconexion : ComandoRobot
 }
 
 internal enum class OrdenRobot(val titulo: String) : ComandoRobot {
@@ -22,10 +25,11 @@ internal enum class OrdenRobot(val titulo: String) : ComandoRobot {
     ReconocerAlertas("Reconocer alertas")
 }
 
-internal enum class EstadoOrden {
-    Pendiente,
-    Confirmada,
-    Rechazada
+internal enum class EstadoOrden(val etiqueta: String) {
+    Pendiente("Pendiente"),
+    Confirmada("Confirmada"),
+    Rechazada("Rechazada"),
+    SinRespuesta("Sin respuesta")
 }
 
 internal data class RespuestaOrden(

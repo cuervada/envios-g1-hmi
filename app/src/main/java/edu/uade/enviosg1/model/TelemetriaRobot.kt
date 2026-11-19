@@ -42,13 +42,19 @@ internal data class TelemetriaRobot(
     val entrega: EntregaRobot? = null,
     val ultimaEntrega: EntregaRegistrada? = null,
     val respuestaOrden: RespuestaOrden? = null,
-    val rechazoPreparado: Boolean = false
+    val rechazoPreparado: Boolean = false,
+    val desactualizada: Boolean = false,
+    val conexionRecuperada: Boolean = false
 ) {
     val conectado: Boolean
-        get() = latenciaMs != null
+        get() = latenciaMs != null && !desactualizada
+
+    val puedeProbarDesconexion: Boolean
+        get() = conectado && respuestaOrden?.estado != EstadoOrden.Pendiente &&
+            (estado == EstadoOperativo.Disponible || puedeEnviar(OrdenRobot.Pausar))
 
     val puedeElegirDestino: Boolean
-        get() = conectado &&
+        get() = conectado && respuestaOrden?.estado != EstadoOrden.Pendiente &&
             (estado == EstadoOperativo.Disponible || entrega?.fase == FaseEntrega.Preparando)
 
     val puedeIniciarEntrega: Boolean

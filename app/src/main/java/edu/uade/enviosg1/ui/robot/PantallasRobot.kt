@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.sp
 import edu.uade.enviosg1.model.ComandoRobot
 import edu.uade.enviosg1.model.EstadoCompartimento
 import edu.uade.enviosg1.model.EstadoOperativo
+import edu.uade.enviosg1.model.EstadoOrden
 import edu.uade.enviosg1.model.FaseEntrega
 import edu.uade.enviosg1.model.OrdenRobot
 import edu.uade.enviosg1.model.puedeEnviar
@@ -76,7 +77,7 @@ internal fun Panel(
         BotonPrincipal(
             if (tieneEntregaActiva) "Ver misión" else "Preparar entrega",
             alPrepararEntrega,
-            enabled = tieneEntregaActiva || lectura.estado == EstadoOperativo.Disponible
+            enabled = tieneEntregaActiva || lectura.puedeElegirDestino
         )
         BotonSecundario("Ver telemetría", alVerTelemetria)
         BotonSecundario("Abrir controles", alAbrirControles)
@@ -104,7 +105,8 @@ internal fun Telemetria(
     val mision = lectura.mision?.let {
         "${it.progreso} % · ${it.destino}\n${it.etapa}"
     } ?: "Sin misión"
-    TituloPantalla("Telemetría", "G1-01 · Lectura actual")
+    val bajada = if (lectura.desactualizada) "G1-01 · Última lectura recibida" else "G1-01 · Lectura actual"
+    TituloPantalla("Telemetría", bajada)
     Tarjeta(
         modifier = Modifier.padding(bottom = 20.dp),
         radio = 14.dp,
@@ -128,14 +130,23 @@ internal fun Telemetria(
         )
     }
     BotonSecundario("Volver", alVolver)
-    BotonSecundario("Probar telemetría (30 s)", alProbar, enabled = lectura.estado == EstadoOperativo.Disponible)
+    BotonSecundario(
+        "Probar telemetría (30 s)",
+        alProbar,
+        enabled = lectura.conectado && lectura.estado == EstadoOperativo.Disponible &&
+            lectura.respuestaOrden?.estado != EstadoOrden.Pendiente
+    )
 }
 
 @Composable
 internal fun Alertas(lectura: TelemetriaRobot, enviar: (ComandoRobot) -> Unit, alVolver: () -> Unit) {
     TituloPantalla("Alertas", "G1-01 · Estado e incidencias")
     if (lectura.alertas.isEmpty()) {
-        Aviso("Sin alertas activas", "El enlace y el compartimento funcionan correctamente.", TipoAviso.Positivo)
+        if (lectura.desactualizada) {
+            TextoSecundario("Sin alertas registradas en la última lectura.")
+        } else {
+            Aviso("Sin alertas activas", "El enlace y el compartimento funcionan correctamente.", TipoAviso.Positivo)
+        }
     } else {
         lectura.alertas.forEach { alerta ->
             val titulo = if (alerta.reconocida) "${alerta.titulo} · Reconocida" else alerta.titulo
@@ -162,7 +173,7 @@ private fun FilasLectura(filas: List<Pair<String, String>>) {
 internal fun TelemetriaRobot.bateriaTexto() = "$bateria %"
 
 private fun TelemetriaRobot.conectividadTexto() =
-    latenciaMs?.let { "Conectado · $it ms" } ?: "Desconectado"
+    if (conectado) "Conectado · $latenciaMs ms" else "Desconectado"
 
 private fun TelemetriaRobot.movimientoTexto(): String {
     val movimiento = if (velocidad == 0.0) "Inmóvil" else "En marcha"

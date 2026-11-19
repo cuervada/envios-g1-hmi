@@ -19,10 +19,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.update
 
 private const val INTERVALO_MS = 1_000L
 private const val RETARDO_RESPUESTA_MS = 1_000L
+private const val LIMITE_RESPUESTA_MS = 3_000L
+private const val AVANCE_PRUEBA_DESCONEXION_MS = 3_000L
 private const val CARGA_SEGUNDOS = 5
 private const val LLEGADA_SEGUNDOS = 15
 private const val DURACION_PRUEBA_SEGUNDOS = 30
@@ -33,7 +34,8 @@ private data class OrdenPendiente(
     val orden: OrdenRobot,
     val recibidaMs: Long,
     val horaRecepcionMs: Long,
-    val rechazoForzado: Boolean
+    val rechazoForzado: Boolean,
+    val confirmacionInterrumpida: Boolean = false
 )
 
 private data class DetencionSinEntrega(
@@ -52,7 +54,9 @@ private data class EstadoSimulador(
     val ultimaRespuesta: RespuestaOrden? = null,
     val rechazoPreparado: Boolean = false,
     val compartimentoReconocido: Boolean = false,
-    val detencionSinEntrega: DetencionSinEntrega? = null
+    val detencionSinEntrega: DetencionSinEntrega? = null,
+    val lecturaAntesDelCorte: TelemetriaRobot? = null,
+    val conexionRecuperada: Boolean = false
 ) {
     fun avanzarEntrega(ahoraMs: Long): EstadoSimulador {
         val anterior = entrega ?: return this
@@ -69,6 +73,8 @@ internal class SimuladorRobot(
 ) {
     private val inicioSimuladorMs = relojMonotonicoMs()
     private val estado = MutableStateFlow(EstadoSimulador())
+    private val bloqueoEstado = Any()
+    private var ultimaLecturaRecibida: TelemetriaRobot? = null
 
     private val intervalos = flow {
         while (true) {
@@ -77,25 +83,90 @@ internal class SimuladorRobot(
         }
     }
 
-    val telemetria: Flow<TelemetriaRobot> = intervalos.combine(estado) { _, operacion ->
-        val ahora = relojMonotonicoMs()
-        leer(avanzar(operacion, ahora), ahora, horaActualMs())
+    val telemetria: Flow<TelemetriaRobot> = intervalos.combine(estado) { _, _ ->
+        synchronized(bloqueoEstado) {
+            val ahora = relojMonotonicoMs()
+            val lectura = leer(avanzar(estado.value, ahora), ahora, horaActualMs())
+            if (lectura.conectado) ultimaLecturaRecibida = lectura
+            lectura
+        }
     }
 
     fun ejecutar(comando: ComandoRobot) {
-        estado.update { anterior ->
+        synchronized(bloqueoEstado) {
             val ahora = relojMonotonicoMs()
             val hora = horaActualMs()
-            val actual = avanzar(anterior, ahora)
+            val actual = avanzar(estado.value, ahora)
             val lectura = leer(actual, ahora, hora)
-            if (comando is OrdenRobot) {
-                recibirOrden(actual, lectura, comando, ahora, hora)
-            } else if (actual.pendiente != null) {
-                actual
-            } else {
-                aplicarAccion(actual, lectura, comando, ahora, hora)
+            estado.value = when {
+                comando == ComandoRobot.CortarEnlace ->
+                    if (lectura.conectado) cortarEnlace(actual, lectura, ultimaLecturaRecibida ?: lectura, ahora)
+                    else actual
+
+                comando == ComandoRobot.RecuperarEnlace -> recuperarEnlace(actual, ahora, hora)
+                !lectura.conectado -> actual
+                comando == ComandoRobot.ProbarDesconexion -> probarDesconexion(actual, lectura, ahora, hora)
+                comando is OrdenRobot -> recibirOrden(actual, lectura, comando, ahora, hora)
+                actual.pendiente != null -> actual
+                else -> aplicarAccion(actual, lectura, comando, ahora, hora)
             }
         }
+    }
+
+    private fun cortarEnlace(
+        estado: EstadoSimulador,
+        lecturaActual: TelemetriaRobot,
+        ultimaLectura: TelemetriaRobot,
+        ahoraMs: Long
+    ): EstadoSimulador {
+        val entrega = estado.entrega
+        val debePausar = entrega?.fase == FaseEntrega.EnCamino || entrega?.fase == FaseEntrega.Regresando
+        val entregaTrasCorte = if (debePausar) {
+            entrega.inmovilizar(FaseEntrega.Pausada, lecturaActual, ahoraMs)
+        } else {
+            entrega
+        }
+        return estado.copy(
+            entrega = entregaTrasCorte,
+            lecturaAntesDelCorte = ultimaLectura,
+            conexionRecuperada = false,
+            pendiente = estado.pendiente?.copy(confirmacionInterrumpida = true)
+        )
+    }
+
+    private fun recuperarEnlace(estado: EstadoSimulador, ahoraMs: Long, horaMs: Long): EstadoSimulador {
+        if (estado.lecturaAntesDelCorte == null) return estado
+        val recuperado = estado.copy(lecturaAntesDelCorte = null, conexionRecuperada = true)
+        ultimaLecturaRecibida = leer(recuperado, ahoraMs, horaMs)
+        return recuperado
+    }
+
+    private fun probarDesconexion(
+        estado: EstadoSimulador,
+        lectura: TelemetriaRobot,
+        ahoraMs: Long,
+        horaMs: Long
+    ): EstadoSimulador {
+        if (!lectura.puedeProbarDesconexion) return estado
+
+        val escenario = if (lectura.estado == EstadoOperativo.Disponible) {
+            estado.copy(
+                entrega = EntregaSimulada(
+                    datos = EntregaRobot(estado.siguienteNumero, destinoPrueba, FaseEntrega.EnCamino),
+                    inicioFaseMs = ahoraMs - AVANCE_PRUEBA_DESCONEXION_MS,
+                    conPaquete = true
+                ),
+                siguienteNumero = estado.siguienteNumero + 1,
+                inicioPruebaMs = null,
+                compartimentoReconocido = false,
+                ultimaRespuesta = null
+            )
+        } else {
+            estado
+        }
+        val muestra = leer(escenario, ahoraMs, horaMs)
+        val conPausa = recibirOrden(escenario, muestra, OrdenRobot.Pausar, ahoraMs, horaMs)
+        return cortarEnlace(conPausa, muestra, muestra, ahoraMs)
     }
 
     private fun recibirOrden(
@@ -115,12 +186,25 @@ internal class SimuladorRobot(
         val forzar = estado.rechazoPreparado && !esDetencion
         return estado.copy(
             pendiente = OrdenPendiente(orden, ahoraMs, horaMs, forzar),
-            rechazoPreparado = estado.rechazoPreparado && !forzar
+            rechazoPreparado = estado.rechazoPreparado && !forzar,
+            conexionRecuperada = false
         )
     }
 
     private fun avanzar(anterior: EstadoSimulador, ahoraMs: Long): EstadoSimulador {
         val pendiente = anterior.pendiente ?: return anterior.avanzarEntrega(ahoraMs)
+        if (pendiente.confirmacionInterrumpida) {
+            val actual = anterior.avanzarEntrega(ahoraMs)
+            if (ahoraMs - pendiente.recibidaMs < LIMITE_RESPUESTA_MS) return actual
+            return actual.copy(
+                pendiente = null,
+                ultimaRespuesta = RespuestaOrden(
+                    pendiente.orden,
+                    EstadoOrden.SinRespuesta,
+                    "Venció la espera de confirmación del G1."
+                )
+            )
+        }
         val instanteRespuesta = pendiente.recibidaMs + RETARDO_RESPUESTA_MS
         if (ahoraMs < instanteRespuesta) return anterior.avanzarEntrega(ahoraMs)
 
@@ -302,6 +386,23 @@ internal class SimuladorRobot(
     }
 
     private fun leer(operacion: EstadoSimulador, ahoraMs: Long, horaMs: Long): TelemetriaRobot {
+        val respuesta = operacion.pendiente?.let {
+            val detalle = if (it.confirmacionInterrumpida) {
+                "El enlace se cortó antes de recibir la confirmación."
+            } else {
+                "Esperando la respuesta del G1."
+            }
+            RespuestaOrden(it.orden, EstadoOrden.Pendiente, detalle)
+        } ?: operacion.ultimaRespuesta
+        val guardada = operacion.lecturaAntesDelCorte
+        if (guardada != null) {
+            return guardada.copy(
+                desactualizada = true,
+                conexionRecuperada = false,
+                respuestaOrden = respuesta,
+                rechazoPreparado = operacion.rechazoPreparado
+            )
+        }
         val segundosTotal = (ahoraMs - inicioSimuladorMs) / INTERVALO_MS
         val base = TelemetriaRobot(
             latenciaMs = 24 + (segundosTotal % 7).toInt(),
@@ -322,9 +423,6 @@ internal class SimuladorRobot(
             )
             else -> leerPrueba(base, operacion.inicioPruebaMs, ahoraMs)
         }
-        val respuesta = operacion.pendiente?.let {
-            RespuestaOrden(it.orden, EstadoOrden.Pendiente, "Esperando la respuesta del G1.")
-        } ?: operacion.ultimaRespuesta
         val alertas = if (lectura.compartimento == EstadoCompartimento.Abierto) {
             listOf(
                 AlertaRobot(
@@ -339,7 +437,8 @@ internal class SimuladorRobot(
         return lectura.copy(
             respuestaOrden = respuesta,
             rechazoPreparado = operacion.rechazoPreparado,
-            alertas = alertas
+            alertas = alertas,
+            conexionRecuperada = operacion.conexionRecuperada
         )
     }
 

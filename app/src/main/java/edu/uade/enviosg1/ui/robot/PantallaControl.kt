@@ -39,7 +39,21 @@ internal fun Controles(
     val subtitulo = if (destino == null) "G1-01 · Control operativo"
         else "Misión ${entrega.codigo} · ${destino.nombre}"
 
-    TituloPantalla("Control de misión", subtitulo)
+    val titulo = when {
+        !lectura.conectado -> "Sin conexión"
+        lectura.conexionRecuperada -> "Conexión recuperada"
+        else -> "Control de misión"
+    }
+    TituloPantalla(titulo, subtitulo)
+    BotonSecundario(
+        if (lectura.conectado) "Cortar el enlace" else "Recuperar conexión",
+        {
+            enviar(
+                if (lectura.conectado) ComandoRobot.CortarEnlace
+                else ComandoRobot.RecuperarEnlace
+            )
+        }
+    )
     TarjetaEstadoOperativo(lectura)
     lectura.mision?.let { mision ->
         Tarjeta {
@@ -106,9 +120,9 @@ internal fun AvisoRespuesta(respuesta: RespuestaOrden?) {
     val tipo = when (respuesta.estado) {
         EstadoOrden.Pendiente -> TipoAviso.Advertencia
         EstadoOrden.Confirmada -> TipoAviso.Positivo
-        EstadoOrden.Rechazada -> TipoAviso.Error
+        EstadoOrden.Rechazada, EstadoOrden.SinRespuesta -> TipoAviso.Error
     }
-    Aviso("${respuesta.estado.name} · ${respuesta.orden.titulo}", respuesta.detalle, tipo)
+    Aviso("${respuesta.estado.etiqueta} · ${respuesta.orden.titulo}", respuesta.detalle, tipo)
 }
 
 @Composable
@@ -116,6 +130,6 @@ internal fun BotonForzarRechazo(lectura: TelemetriaRobot, enviar: (ComandoRobot)
     BotonSecundario(
         if (lectura.rechazoPreparado) "Quitar rechazo forzado" else "Forzar rechazo",
         { enviar(ComandoRobot.AlternarRechazo) },
-        enabled = lectura.respuestaOrden?.estado != EstadoOrden.Pendiente
+        enabled = lectura.conectado && lectura.respuestaOrden?.estado != EstadoOrden.Pendiente
     )
 }

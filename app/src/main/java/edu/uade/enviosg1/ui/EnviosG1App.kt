@@ -116,8 +116,22 @@ internal fun EnviosG1App(robotViewModel: RobotViewModel) {
                     .padding(top = if (pantalla == Pantalla.Seleccion) 30.dp else 22.dp, bottom = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                if (lectura.desactualizada) {
+                    Aviso(
+                        "Telemetría desactualizada",
+                        "Última lectura recibida a las ${formatearHora(lectura.ultimaActualizacionMs)}.",
+                        TipoAviso.Advertencia
+                    )
+                }
                 when (pantalla) {
-                    Pantalla.Seleccion -> SeleccionRobot(lectura) { pantalla = Pantalla.Panel }
+                    Pantalla.Seleccion -> SeleccionRobot(
+                        lectura = lectura,
+                        alSeleccionar = { pantalla = Pantalla.Panel },
+                        alProbarDesconexion = {
+                            robotViewModel.enviar(ComandoRobot.ProbarDesconexion)
+                            abrirDetalle(Pantalla.Control, Pantalla.Panel)
+                        }
+                    )
                     Pantalla.Panel -> Panel(
                         lectura = lectura,
                         alPrepararEntrega = {
@@ -273,7 +287,11 @@ private fun NavegacionInferior(actual: Pantalla, alSeleccionar: (Pantalla) -> Un
 }
 
 @Composable
-private fun SeleccionRobot(lectura: TelemetriaRobot, alSeleccionar: () -> Unit) {
+private fun SeleccionRobot(
+    lectura: TelemetriaRobot,
+    alSeleccionar: () -> Unit,
+    alProbarDesconexion: () -> Unit
+) {
     TituloPantalla(Pantalla.Seleccion.etiqueta, "Logística interna · Campus Buenos Aires")
     Tarjeta(modifier = Modifier.padding(top = 18.dp), altoMinimo = 155) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -293,7 +311,11 @@ private fun SeleccionRobot(lectura: TelemetriaRobot, alSeleccionar: () -> Unit) 
     }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         BotonPrincipal("Seleccionar G1-01", alSeleccionar)
-        BotonSecundario("Probar desconexión", enabled = false)
+        BotonSecundario(
+            "Probar desconexión",
+            alProbarDesconexion,
+            enabled = lectura.puedeProbarDesconexion
+        )
     }
 }
 
