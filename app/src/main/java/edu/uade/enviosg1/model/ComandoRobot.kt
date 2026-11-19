@@ -16,6 +16,7 @@ internal sealed interface ComandoRobot {
     data object AlternarBateriaBaja : ComandoRobot
     data object AlternarObstaculo : ComandoRobot
     data object DescargarEnRecepcion : ComandoRobot
+    data object SimularPlazoVencido : ComandoRobot
 }
 
 internal enum class OrdenRobot(val titulo: String) : ComandoRobot {

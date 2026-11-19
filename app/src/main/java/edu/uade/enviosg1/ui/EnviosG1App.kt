@@ -46,6 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import edu.uade.enviosg1.model.ComandoRobot
 import edu.uade.enviosg1.model.EntregaRegistrada
 import edu.uade.enviosg1.model.EstadoOperativo
+import edu.uade.enviosg1.model.ResultadoEntrega
 import edu.uade.enviosg1.model.TelemetriaRobot
 import edu.uade.enviosg1.ui.robot.Alertas
 import edu.uade.enviosg1.ui.robot.Controles
@@ -323,12 +324,15 @@ private fun SeleccionRobot(
 private fun Historial(ultimaEntrega: EntregaRegistrada?, alVolver: () -> Unit) {
     TituloPantalla("Historial", "Misiones y eventos registrados")
     ultimaEntrega?.let { entrega ->
-        val retiro = formatearHora(entrega.retiroConfirmadoMs)
-        val regreso = formatearHora(entrega.regresoMs)
+        val horaResultado = formatearHora(entrega.horaResultadoMs)
+        val retirado = entrega.resultado == ResultadoEntrega.Entregada
+        val resultado = if (retirado) "Retiro confirmado a las $horaResultado."
+            else "Plazo vencido a las $horaResultado."
+        val regreso = entrega.regresoMs?.let { " Regresó a Recepción a las " + formatearHora(it) + "." }.orEmpty()
         Aviso(
             "${entrega.codigo} · ${entrega.destino.nombre}",
-            "Retiro confirmado a las $retiro. Regresó a Recepción a las $regreso.",
-            TipoAviso.Positivo
+            "${entrega.resultado.etiqueta} · $resultado$regreso",
+            if (retirado) TipoAviso.Positivo else TipoAviso.Advertencia
         )
     }
     Aviso("G1-023 · Oficina 201", "No retirado · Regresó a Recepción a las 13:25.", TipoAviso.Advertencia)

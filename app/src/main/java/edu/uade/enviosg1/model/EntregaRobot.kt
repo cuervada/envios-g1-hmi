@@ -12,6 +12,7 @@ internal enum class FaseEntrega {
     EsperandoRetiro,
     RetirandoPaquete,
     RetiroConfirmado,
+    RetiroVencido,
     ListaParaRegresar,
     Regresando,
     Pausada,
@@ -26,15 +27,22 @@ internal data class EntregaRobot(
     val destino: DestinoEntrega?,
     val fase: FaseEntrega = FaseEntrega.Preparando,
     val retiroConfirmadoMs: Long? = null,
-    val esRegreso: Boolean = false
+    val esRegreso: Boolean = false,
+    val retiroVencidoMs: Long? = null
 ) {
     val codigo: String
         get() = "G1-" + numero.toString().padStart(3, '0')
 }
 
+internal enum class ResultadoEntrega(val etiqueta: String) {
+    Entregada("Entregada"),
+    NoRetirado("No retirado")
+}
+
 internal data class EntregaRegistrada(
     val codigo: String,
     val destino: DestinoEntrega,
-    val retiroConfirmadoMs: Long,
-    val regresoMs: Long
+    val resultado: ResultadoEntrega,
+    val horaResultadoMs: Long,
+    val regresoMs: Long?
 )

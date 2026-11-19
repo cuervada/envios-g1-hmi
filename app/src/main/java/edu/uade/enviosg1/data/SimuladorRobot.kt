@@ -29,7 +29,6 @@ private const val AVANCE_PRUEBA_DESCONEXION_MS = 3_000L
 private const val CARGA_SEGUNDOS = 5
 private const val LLEGADA_SEGUNDOS = 15
 private const val DURACION_PRUEBA_SEGUNDOS = 30
-private const val ESPERA_RETIRO_SEGUNDOS = 4 * 60 + 30
 private val destinoPrueba = DestinoEntrega.Oficina204
 
 private data class OrdenPendiente(
@@ -63,17 +62,14 @@ private data class EstadoSimulador(
     val lecturaAntesDelCorte: TelemetriaRobot? = null,
     val conexionRecuperada: Boolean = false
 ) {
-    fun avanzarEntrega(ahoraMs: Long): EstadoSimulador {
+    fun avanzarEntrega(ahoraMs: Long, horaMs: Long): EstadoSimulador {
         val anterior = entrega ?: return this
-        val actual = anterior.avanzar(ahoraMs)
-        if (actual == anterior) return this
-        val registro = if (actual.fase == FaseEntrega.Finalizada && actual.datos.retiroConfirmadoMs != null) {
-            actual.registro()
-        } else {
-            ultimaEntrega
-        }
-        return copy(entrega = actual, ultimaEntrega = registro)
+        return actualizarEntrega(anterior.avanzar(ahoraMs, horaMs))
     }
+
+    fun actualizarEntrega(actual: EntregaSimulada): EstadoSimulador =
+        if (actual == entrega) this else copy(entrega = actual, ultimaEntrega = actual.registro() ?: ultimaEntrega)
+
 }
 
 internal class SimuladorRobot(
@@ -95,7 +91,10 @@ internal class SimuladorRobot(
     val telemetria: Flow<TelemetriaRobot> = intervalos.combine(estado) { _, _ ->
         synchronized(bloqueoEstado) {
             val ahora = relojMonotonicoMs()
-            val lectura = leer(avanzar(estado.value, ahora), ahora, horaActualMs())
+            val hora = horaActualMs()
+            val actual = avanzar(estado.value, ahora, hora)
+            estado.value = actual
+            val lectura = leer(actual, ahora, hora)
             if (lectura.conectado) ultimaLecturaRecibida = lectura
             lectura
         }
@@ -105,7 +104,7 @@ internal class SimuladorRobot(
         synchronized(bloqueoEstado) {
             val ahora = relojMonotonicoMs()
             val hora = horaActualMs()
-            val actual = avanzar(estado.value, ahora)
+            val actual = avanzar(estado.value, ahora, hora)
             val lectura = leer(actual, ahora, hora)
             estado.value = when {
                 comando == ComandoRobot.CortarEnlace ->
@@ -191,7 +190,8 @@ internal class SimuladorRobot(
                 ),
                 siguienteNumero = estado.siguienteNumero + 1,
                 inicioPruebaMs = null,
-                alertasReconocidas = estado.alertasReconocidas - TipoAlertaRobot.CompartimentoAbierto,
+                alertasReconocidas = estado.alertasReconocidas -
+                    TipoAlertaRobot.CompartimentoAbierto - TipoAlertaRobot.RetiroVencido,
                 ultimaRespuesta = null
             )
         } else {
@@ -235,10 +235,10 @@ internal class SimuladorRobot(
         )
     }
 
-    private fun avanzar(anterior: EstadoSimulador, ahoraMs: Long): EstadoSimulador {
-        val pendiente = anterior.pendiente ?: return anterior.avanzarEntrega(ahoraMs)
+    private fun avanzar(anterior: EstadoSimulador, ahoraMs: Long, horaMs: Long): EstadoSimulador {
+        val pendiente = anterior.pendiente ?: return anterior.avanzarEntrega(ahoraMs, horaMs)
         if (pendiente.confirmacionInterrumpida) {
-            val actual = anterior.avanzarEntrega(ahoraMs)
+            val actual = anterior.avanzarEntrega(ahoraMs, horaMs)
             if (ahoraMs - pendiente.recibidaMs < LIMITE_RESPUESTA_MS) return actual
             return actual.copy(
                 pendiente = null,
@@ -250,10 +250,10 @@ internal class SimuladorRobot(
             )
         }
         val instanteRespuesta = pendiente.recibidaMs + RETARDO_RESPUESTA_MS
-        if (ahoraMs < instanteRespuesta) return anterior.avanzarEntrega(ahoraMs)
+        if (ahoraMs < instanteRespuesta) return anterior.avanzarEntrega(ahoraMs, horaMs)
 
         val horaRespuesta = pendiente.horaRecepcionMs + RETARDO_RESPUESTA_MS
-        val actual = anterior.avanzarEntrega(instanteRespuesta).copy(pendiente = null)
+        val actual = anterior.avanzarEntrega(instanteRespuesta, horaRespuesta).copy(pendiente = null)
         val lectura = leer(actual, instanteRespuesta, horaRespuesta)
         val motivo = when {
             pendiente.rechazoForzado -> "El simulador rechazó esta orden por la prueba de rechazo."
@@ -267,7 +267,7 @@ internal class SimuladorRobot(
         } else {
             confirmarOrden(actual, lectura, pendiente, instanteRespuesta, horaRespuesta)
         }
-        return resuelto.avanzarEntrega(ahoraMs)
+        return resuelto.avanzarEntrega(ahoraMs, horaMs)
     }
 
     private fun confirmarOrden(
@@ -339,7 +339,8 @@ internal class SimuladorRobot(
                 estado.copy(
                     inicioPruebaMs = ahoraMs,
                     entrega = null,
-                    alertasReconocidas = estado.alertasReconocidas - TipoAlertaRobot.CompartimentoAbierto,
+                    alertasReconocidas = estado.alertasReconocidas -
+                    TipoAlertaRobot.CompartimentoAbierto - TipoAlertaRobot.RetiroVencido,
                     ultimaRespuesta = null
                 )
             } else {
@@ -361,8 +362,7 @@ internal class SimuladorRobot(
                 val actual = accionarCompartimento(entrega, comando, ahoraMs, horaMs)
                 val nuevaApertura = entrega.compartimento != EstadoCompartimento.Abierto &&
                     actual.compartimento == EstadoCompartimento.Abierto
-                estado.copy(
-                    entrega = actual,
+                estado.actualizarEntrega(actual).copy(
                     alertasReconocidas = if (nuevaApertura) {
                         estado.alertasReconocidas - TipoAlertaRobot.CompartimentoAbierto
                     } else {
@@ -390,7 +390,8 @@ internal class SimuladorRobot(
             inicioPruebaMs = null,
             entrega = EntregaSimulada(EntregaRobot(estado.siguienteNumero, destino), ahoraMs),
             siguienteNumero = estado.siguienteNumero + 1,
-            alertasReconocidas = estado.alertasReconocidas - TipoAlertaRobot.CompartimentoAbierto,
+            alertasReconocidas = estado.alertasReconocidas -
+                    TipoAlertaRobot.CompartimentoAbierto - TipoAlertaRobot.RetiroVencido,
             ultimaRespuesta = null
         )
     }
@@ -404,6 +405,8 @@ internal class SimuladorRobot(
         if (entrega.datos.destino == null) return entrega
         val preparando = entrega.fase == FaseEntrega.Preparando
         val abierto = entrega.compartimento == EstadoCompartimento.Abierto
+        val cierreMantieneFase = preparando || entrega.fase == FaseEntrega.Cancelada ||
+            entrega.fase == FaseEntrega.Detenida || entrega.fase == FaseEntrega.RetiroVencido
         return when (comando) {
             ComandoRobot.CambiarDestino ->
                 if (preparando) entrega.copy(datos = entrega.datos.copy(destino = null)) else entrega
@@ -422,7 +425,7 @@ internal class SimuladorRobot(
                 if (preparando && abierto) entrega.copy(conPaquete = true) else entrega
 
             ComandoRobot.CerrarYTrabar -> when {
-                (preparando || entrega.fase == FaseEntrega.Cancelada || entrega.fase == FaseEntrega.Detenida) && abierto ->
+                cierreMantieneFase && abierto ->
                     entrega.copy(compartimento = EstadoCompartimento.CerradoTrabado)
                 entrega.fase == FaseEntrega.RetirandoPaquete && abierto ->
                     entrega.copy(
@@ -441,6 +444,8 @@ internal class SimuladorRobot(
                 } else {
                     entrega
                 }
+
+            ComandoRobot.SimularPlazoVencido -> entrega.simularVencimiento(ahoraMs, horaMs)
 
             ComandoRobot.DescargarEnRecepcion ->
                 if (entrega.fase == FaseEntrega.DescargaEnRecepcion) {
@@ -522,6 +527,15 @@ internal class SimuladorRobot(
                 tipo,
                 "Batería baja · ${lectura.bateria} %",
                 "Se bloqueó el inicio de otra entrega. Solicitá el regreso si está habilitado.",
+                tipo in reconocidas
+            ))
+        }
+        if (lectura.entrega?.fase == FaseEntrega.RetiroVencido) {
+            val tipo = TipoAlertaRobot.RetiroVencido
+            add(AlertaRobot(
+                tipo,
+                "Paquete no retirado",
+                "Venció el plazo. Solicitá el regreso cuando esté habilitado.",
                 tipo in reconocidas
             ))
         }

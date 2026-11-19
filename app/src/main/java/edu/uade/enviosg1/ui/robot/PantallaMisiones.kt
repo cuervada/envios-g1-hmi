@@ -82,6 +82,8 @@ internal fun Misiones(
         FaseEntrega.RetiroConfirmado,
         FaseEntrega.ListaParaRegresar -> Retiro(lectura, entrega, destino, subtitulo, enviar)
 
+        FaseEntrega.RetiroVencido -> RetiroVencido(lectura, entrega, destino, subtitulo, enviar)
+
         FaseEntrega.Pausada, FaseEntrega.Cancelada, FaseEntrega.Detenida -> {
             val titulo = when (entrega.fase) {
                 FaseEntrega.Pausada -> "Misión en pausa"
@@ -90,16 +92,26 @@ internal fun Misiones(
             }
             TituloPantalla(titulo, subtitulo)
             TarjetaEstadoOperativo(lectura)
-            ProgresoRecorrido(destino, lectura.mision?.progreso ?: 0, entrega.esRegreso, entrega.retiroConfirmadoMs == null)
+            ProgresoRecorrido(
+                destino,
+                lectura.mision?.progreso ?: 0,
+                entrega.esRegreso,
+                regresoAnticipado = entrega.retiroConfirmadoMs == null && entrega.retiroVencidoMs == null
+            )
             lectura.alertas.filter { it.tipo != TipoAlertaRobot.CompartimentoAbierto }.forEach { AvisoAlerta(it) }
             AvisoRespuesta(respuesta)
             BotonSecundario("Ver telemetría", alVerTelemetria)
         }
 
         FaseEntrega.DescargaEnRecepcion -> {
-            TituloPantalla("Regreso con paquete", subtitulo)
+            val vencio = entrega.retiroVencidoMs != null
+            TituloPantalla(if (vencio) "Envío en Recepción" else "Regreso con paquete", subtitulo)
             TarjetaEstadoOperativo(lectura)
-            Aviso("Descarga pendiente", "El paquete volvió a Recepción.", TipoAviso.Advertencia)
+            Aviso(
+                if (vencio) "No retirado" else "Descarga pendiente",
+                "Descargá el paquete en Recepción para dejar el G1 disponible.",
+                TipoAviso.Advertencia
+            )
             BotonPrincipal(
                 "Descargar en Recepción",
                 { enviar(ComandoRobot.DescargarEnRecepcion) },
@@ -113,7 +125,11 @@ internal fun Misiones(
             if (entregada) {
                 Aviso("Entregada", "El paquete fue retirado y el G1 regresó a Recepción.", TipoAviso.Positivo)
             } else {
-                Aviso("Paquete en Recepción", "El paquete se descargó en la base.", TipoAviso.Positivo)
+                Aviso(
+                    if (entrega.retiroVencidoMs != null) "No retirado" else "Paquete en Recepción",
+                    "El paquete se descargó en la base.",
+                    if (entrega.retiroVencidoMs != null) TipoAviso.Advertencia else TipoAviso.Positivo
+                )
             }
             BotonPrincipal("Volver al panel", alVolverAlPanel)
         }
@@ -199,9 +215,20 @@ private fun Recorrido(
     alVerTelemetria: () -> Unit,
     alAbrirControles: () -> Unit
 ) {
-    TituloPantalla(if (regresando) "Regresando a base" else destino.nombre, subtitulo)
+    val entrega = lectura.entrega
+    val titulo = when {
+        regresando && entrega?.retiroVencidoMs != null -> "Regreso del envío no retirado"
+        regresando -> "Regresando a base"
+        else -> destino.nombre
+    }
+    TituloPantalla(titulo, subtitulo)
     TarjetaEstadoOperativo(lectura)
-    ProgresoRecorrido(destino, lectura.mision?.progreso ?: 0, regresando, lectura.entrega?.retiroConfirmadoMs == null)
+    ProgresoRecorrido(
+        destino,
+        lectura.mision?.progreso ?: 0,
+        regresando,
+        regresoAnticipado = entrega?.retiroConfirmadoMs == null && entrega?.retiroVencidoMs == null
+    )
     lectura.mision?.let { TextoSecundario(it.etapa) }
     lectura.alertas.filter { it.tipo == TipoAlertaRobot.BateriaBaja }.forEach { AvisoAlerta(it) }
     AvisoRespuesta(lectura.respuestaOrden)
@@ -234,10 +261,21 @@ private fun Retiro(
             val tiempo = lectura.esperaRestanteSegundos?.let(::formatearEspera) ?: "—"
             Aviso("Tiempo para retirar · $tiempo", "El G1 espera en la puerta de la oficina.", TipoAviso.Advertencia)
             BotonPrincipal("Simular retiro del paquete", { enviar(ComandoRobot.AbrirCompartimento) }, puedeOperar)
+            BotonSecundario(
+                "Simular plazo vencido",
+                { enviar(ComandoRobot.SimularPlazoVencido) },
+                enabled = lectura.puedeSimularVencimiento
+            )
         }
         FaseEntrega.RetirandoPaquete -> {
-            Aviso("Compartimento abierto", "Retirá el paquete y confirmá el retiro.", TipoAviso.Advertencia)
+            val tiempo = lectura.esperaRestanteSegundos?.let(::formatearEspera) ?: "—"
+            Aviso("Tiempo para retirar · $tiempo", "Retirá el paquete y confirmá el retiro.", TipoAviso.Advertencia)
             BotonPrincipal("Confirmar retiro", { enviar(ComandoRobot.ConfirmarRetiro) }, puedeOperar)
+            BotonSecundario(
+                "Simular plazo vencido",
+                { enviar(ComandoRobot.SimularPlazoVencido) },
+                enabled = lectura.puedeSimularVencimiento
+            )
         }
         FaseEntrega.RetiroConfirmado -> {
             Aviso("Sin carga", "El sensor de carga indica que el compartimento está vacío. Cerrá y trabá para volver.", TipoAviso.Positivo)
@@ -256,17 +294,48 @@ private fun Retiro(
 }
 
 @Composable
+private fun RetiroVencido(
+    lectura: TelemetriaRobot,
+    entrega: EntregaRobot,
+    destino: DestinoEntrega,
+    subtitulo: String,
+    enviar: (ComandoRobot) -> Unit
+) {
+    TituloPantalla("Paquete no retirado", subtitulo)
+    TarjetaEstadoOperativo(lectura)
+    ProgresoRecorrido(destino, 100)
+    val hora = entrega.retiroVencidoMs?.let(::formatearHora).orEmpty()
+    val abierto = lectura.compartimento == EstadoCompartimento.Abierto
+    val accion = if (abierto) "Cerrá y trabá el compartimento para regresar."
+        else "El paquete sigue dentro. Solicitá el regreso cuando esté habilitado."
+    Aviso("No retirado · 00:00", "El plazo venció a las $hora. $accion", TipoAviso.Advertencia)
+    AvisoRespuesta(lectura.respuestaOrden?.takeIf { it.orden == OrdenRobot.Regresar })
+    if (abierto) {
+        BotonSecundario(
+            "Cerrar y trabar",
+            { enviar(ComandoRobot.CerrarYTrabar) },
+            enabled = lectura.conectado && lectura.respuestaOrden?.estado != EstadoOrden.Pendiente
+        )
+    }
+    BotonPrincipal(
+        "Solicitar regreso a punto seguro",
+        { enviar(OrdenRobot.Regresar) },
+        enabled = lectura.puedeEnviar(OrdenRobot.Regresar)
+    )
+}
+
+@Composable
 private fun ProgresoRecorrido(
     destino: DestinoEntrega,
     porcentaje: Int,
     regreso: Boolean = false,
-    sinRetiro: Boolean = false
+    regresoAnticipado: Boolean = false
 ) {
     val colores = MaterialTheme.colorScheme
     val progreso = porcentaje / 100f
-    val regresoAnticipado = regreso && sinRetiro
+    val tramoParcial = regreso && regresoAnticipado
     val inicio = when {
-        regresoAnticipado -> "Punto de retorno"
+        tramoParcial -> "Punto de retorno"
         regreso -> destino.nombre
         else -> "Recepción"
     }
@@ -289,7 +358,7 @@ private fun ProgresoRecorrido(
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             MarcaRecorrido(inicio, true, Alignment.Start)
-            if (!regresoAnticipado) {
+            if (!tramoParcial) {
                 MarcaRecorrido("Ascensor", porcentaje >= 36, Alignment.CenterHorizontally)
             }
             MarcaRecorrido(fin, porcentaje == 100, Alignment.End)

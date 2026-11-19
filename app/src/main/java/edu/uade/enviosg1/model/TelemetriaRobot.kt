@@ -24,7 +24,8 @@ internal data class MisionRobot(
 internal enum class TipoAlertaRobot {
     Obstaculo,
     BateriaBaja,
-    CompartimentoAbierto
+    CompartimentoAbierto,
+    RetiroVencido
 }
 
 internal data class AlertaRobot(
@@ -79,6 +80,12 @@ internal data class TelemetriaRobot(
             trayectoBloqueado || entrega?.fase == FaseEntrega.EnCamino || entrega?.fase == FaseEntrega.Regresando
         )
 
+    val puedeSimularVencimiento: Boolean
+        get() = conectado && respuestaOrden?.estado != EstadoOrden.Pendiente &&
+            conPaquete && entrega?.fase.let {
+                it == FaseEntrega.EsperandoRetiro || it == FaseEntrega.RetirandoPaquete
+            }
+
     val puedeRegresar: Boolean
         get() = conectado &&
             !trayectoBloqueado &&
@@ -95,6 +102,7 @@ internal const val UBICACION_RECEPCION = "Recepción · Planta baja"
 private val fasesConRegreso = setOf(
     FaseEntrega.EnCamino,
     FaseEntrega.EsperandoRetiro,
+    FaseEntrega.RetiroVencido,
     FaseEntrega.ListaParaRegresar,
     FaseEntrega.Pausada,
     FaseEntrega.Cancelada,
