@@ -9,10 +9,12 @@ import edu.uade.enviosg1.model.EstadoCompartimento
 import edu.uade.enviosg1.model.EstadoOperativo
 import edu.uade.enviosg1.model.EstadoOrden
 import edu.uade.enviosg1.model.FaseEntrega
+import edu.uade.enviosg1.model.LIMITE_BATERIA_INICIO
 import edu.uade.enviosg1.model.MisionRobot
 import edu.uade.enviosg1.model.OrdenRobot
 import edu.uade.enviosg1.model.RespuestaOrden
 import edu.uade.enviosg1.model.TelemetriaRobot
+import edu.uade.enviosg1.model.TipoAlertaRobot
 import edu.uade.enviosg1.model.motivoBloqueo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -35,7 +37,8 @@ private data class OrdenPendiente(
     val recibidaMs: Long,
     val horaRecepcionMs: Long,
     val rechazoForzado: Boolean,
-    val confirmacionInterrumpida: Boolean = false
+    val confirmacionInterrumpida: Boolean = false,
+    val alertasAReconocer: Set<TipoAlertaRobot> = emptySet()
 )
 
 private data class DetencionSinEntrega(
@@ -53,7 +56,9 @@ private data class EstadoSimulador(
     val pendiente: OrdenPendiente? = null,
     val ultimaRespuesta: RespuestaOrden? = null,
     val rechazoPreparado: Boolean = false,
-    val compartimentoReconocido: Boolean = false,
+    val alertasReconocidas: Set<TipoAlertaRobot> = emptySet(),
+    val bateriaForzada: Boolean = false,
+    val trayectoBloqueado: Boolean = false,
     val detencionSinEntrega: DetencionSinEntrega? = null,
     val lecturaAntesDelCorte: TelemetriaRobot? = null,
     val conexionRecuperada: Boolean = false
@@ -62,7 +67,11 @@ private data class EstadoSimulador(
         val anterior = entrega ?: return this
         val actual = anterior.avanzar(ahoraMs)
         if (actual == anterior) return this
-        val registro = if (actual.fase == FaseEntrega.Finalizada) actual.registro() else ultimaEntrega
+        val registro = if (actual.fase == FaseEntrega.Finalizada && actual.datos.retiroConfirmadoMs != null) {
+            actual.registro()
+        } else {
+            ultimaEntrega
+        }
         return copy(entrega = actual, ultimaEntrega = registro)
     }
 }
@@ -105,6 +114,11 @@ internal class SimuladorRobot(
 
                 comando == ComandoRobot.RecuperarEnlace -> recuperarEnlace(actual, ahora, hora)
                 !lectura.conectado -> actual
+                comando == ComandoRobot.AlternarBateriaBaja -> actual.copy(
+                    bateriaForzada = !actual.bateriaForzada,
+                    alertasReconocidas = actual.alertasReconocidas - TipoAlertaRobot.BateriaBaja
+                )
+                comando == ComandoRobot.AlternarObstaculo -> alternarObstaculo(actual, lectura, ahora)
                 comando == ComandoRobot.ProbarDesconexion -> probarDesconexion(actual, lectura, ahora, hora)
                 comando is OrdenRobot -> recibirOrden(actual, lectura, comando, ahora, hora)
                 actual.pendiente != null -> actual
@@ -141,6 +155,25 @@ internal class SimuladorRobot(
         return recuperado
     }
 
+    private fun alternarObstaculo(
+        estado: EstadoSimulador,
+        lectura: TelemetriaRobot,
+        ahoraMs: Long
+    ): EstadoSimulador {
+        if (!lectura.puedeSimularObstaculo) return estado
+        val seOcupaTrayecto = !estado.trayectoBloqueado
+        val entrega = if (seOcupaTrayecto) {
+            estado.entrega?.inmovilizar(FaseEntrega.Pausada, lectura, ahoraMs)
+        } else {
+            estado.entrega
+        }
+        return estado.copy(
+            entrega = entrega,
+            trayectoBloqueado = seOcupaTrayecto,
+            alertasReconocidas = estado.alertasReconocidas - TipoAlertaRobot.Obstaculo
+        )
+    }
+
     private fun probarDesconexion(
         estado: EstadoSimulador,
         lectura: TelemetriaRobot,
@@ -158,7 +191,7 @@ internal class SimuladorRobot(
                 ),
                 siguienteNumero = estado.siguienteNumero + 1,
                 inicioPruebaMs = null,
-                compartimentoReconocido = false,
+                alertasReconocidas = estado.alertasReconocidas - TipoAlertaRobot.CompartimentoAbierto,
                 ultimaRespuesta = null
             )
         } else {
@@ -184,8 +217,19 @@ internal class SimuladorRobot(
             return estado.copy(ultimaRespuesta = RespuestaOrden(orden, EstadoOrden.Rechazada, motivo))
         }
         val forzar = estado.rechazoPreparado && !esDetencion
+        val alertasAReconocer = if (orden == OrdenRobot.ReconocerAlertas) {
+            lectura.alertas.filterNot { it.reconocida }.map { it.tipo }.toSet()
+        } else {
+            emptySet()
+        }
         return estado.copy(
-            pendiente = OrdenPendiente(orden, ahoraMs, horaMs, forzar),
+            pendiente = OrdenPendiente(
+                orden,
+                ahoraMs,
+                horaMs,
+                forzar,
+                alertasAReconocer = alertasAReconocer
+            ),
             rechazoPreparado = estado.rechazoPreparado && !forzar,
             conexionRecuperada = false
         )
@@ -211,15 +255,17 @@ internal class SimuladorRobot(
         val horaRespuesta = pendiente.horaRecepcionMs + RETARDO_RESPUESTA_MS
         val actual = anterior.avanzarEntrega(instanteRespuesta).copy(pendiente = null)
         val lectura = leer(actual, instanteRespuesta, horaRespuesta)
-        val motivo = if (pendiente.rechazoForzado) {
-            "El simulador rechazó esta orden por la prueba de rechazo."
-        } else {
-            lectura.motivoBloqueo(pendiente.orden)
+        val motivo = when {
+            pendiente.rechazoForzado -> "El simulador rechazó esta orden por la prueba de rechazo."
+            pendiente.orden == OrdenRobot.ReconocerAlertas &&
+                lectura.alertas.none { it.tipo in pendiente.alertasAReconocer } ->
+                "Las alertas seleccionadas ya se resolvieron."
+            else -> lectura.motivoBloqueo(pendiente.orden)
         }
         val resuelto = if (motivo != null) {
             actual.copy(ultimaRespuesta = RespuestaOrden(pendiente.orden, EstadoOrden.Rechazada, motivo))
         } else {
-            confirmarOrden(actual, lectura, pendiente.orden, instanteRespuesta, horaRespuesta)
+            confirmarOrden(actual, lectura, pendiente, instanteRespuesta, horaRespuesta)
         }
         return resuelto.avanzarEntrega(ahoraMs)
     }
@@ -227,10 +273,11 @@ internal class SimuladorRobot(
     private fun confirmarOrden(
         estado: EstadoSimulador,
         lectura: TelemetriaRobot,
-        orden: OrdenRobot,
+        pendiente: OrdenPendiente,
         ahoraMs: Long,
         horaMs: Long
     ): EstadoSimulador {
+        val orden = pendiente.orden
         val entrega = estado.entrega
         val actual = when (orden) {
             OrdenRobot.Iniciar -> estado.copy(
@@ -243,9 +290,12 @@ internal class SimuladorRobot(
             OrdenRobot.Cancelar -> estado.copy(
                 entrega = checkNotNull(entrega).inmovilizar(FaseEntrega.Cancelada, lectura, ahoraMs)
             )
-            OrdenRobot.Regresar -> estado.copy(entrega = checkNotNull(entrega).iniciarRegreso(ahoraMs, horaMs))
+            OrdenRobot.Regresar -> estado.copy(entrega = checkNotNull(entrega).iniciarRegreso(lectura, ahoraMs, horaMs))
             OrdenRobot.Detener -> detener(estado, lectura, ahoraMs)
-            OrdenRobot.ReconocerAlertas -> estado.copy(compartimentoReconocido = true)
+            OrdenRobot.ReconocerAlertas -> {
+                val activas = lectura.alertas.map { it.tipo }.toSet()
+                estado.copy(alertasReconocidas = estado.alertasReconocidas + (pendiente.alertasAReconocer intersect activas))
+            }
         }
         val detalle = when (orden) {
             OrdenRobot.Iniciar -> "El G1 inició el recorrido a la oficina."
@@ -261,6 +311,7 @@ internal class SimuladorRobot(
 
     private fun detener(estado: EstadoSimulador, lectura: TelemetriaRobot, ahoraMs: Long): EstadoSimulador {
         val entrega = estado.entrega?.takeUnless { it.fase == FaseEntrega.Finalizada }
+        if (entrega?.fase == FaseEntrega.DescargaEnRecepcion) return estado
         if (entrega != null) {
             return estado.copy(entrega = entrega.inmovilizar(FaseEntrega.Detenida, lectura, ahoraMs))
         }
@@ -288,7 +339,7 @@ internal class SimuladorRobot(
                 estado.copy(
                     inicioPruebaMs = ahoraMs,
                     entrega = null,
-                    compartimentoReconocido = false,
+                    alertasReconocidas = estado.alertasReconocidas - TipoAlertaRobot.CompartimentoAbierto,
                     ultimaRespuesta = null
                 )
             } else {
@@ -312,7 +363,11 @@ internal class SimuladorRobot(
                     actual.compartimento == EstadoCompartimento.Abierto
                 estado.copy(
                     entrega = actual,
-                    compartimentoReconocido = estado.compartimentoReconocido && !nuevaApertura
+                    alertasReconocidas = if (nuevaApertura) {
+                        estado.alertasReconocidas - TipoAlertaRobot.CompartimentoAbierto
+                    } else {
+                        estado.alertasReconocidas
+                    }
                 )
             } else {
                 estado
@@ -335,7 +390,7 @@ internal class SimuladorRobot(
             inicioPruebaMs = null,
             entrega = EntregaSimulada(EntregaRobot(estado.siguienteNumero, destino), ahoraMs),
             siguienteNumero = estado.siguienteNumero + 1,
-            compartimentoReconocido = false,
+            alertasReconocidas = estado.alertasReconocidas - TipoAlertaRobot.CompartimentoAbierto,
             ultimaRespuesta = null
         )
     }
@@ -367,7 +422,13 @@ internal class SimuladorRobot(
                 if (preparando && abierto) entrega.copy(conPaquete = true) else entrega
 
             ComandoRobot.CerrarYTrabar -> when {
-                preparando && abierto -> entrega.copy(compartimento = EstadoCompartimento.CerradoTrabado)
+                (preparando || entrega.fase == FaseEntrega.Cancelada || entrega.fase == FaseEntrega.Detenida) && abierto ->
+                    entrega.copy(compartimento = EstadoCompartimento.CerradoTrabado)
+                entrega.fase == FaseEntrega.RetirandoPaquete && abierto ->
+                    entrega.copy(
+                        datos = entrega.datos.copy(fase = FaseEntrega.EsperandoRetiro),
+                        compartimento = EstadoCompartimento.CerradoTrabado
+                    )
                 entrega.fase == FaseEntrega.RetiroConfirmado && abierto ->
                     entrega.cambiarFase(FaseEntrega.ListaParaRegresar, ahoraMs)
                         .copy(compartimento = EstadoCompartimento.CerradoTrabado)
@@ -377,6 +438,14 @@ internal class SimuladorRobot(
             ComandoRobot.ConfirmarRetiro ->
                 if (entrega.fase == FaseEntrega.RetirandoPaquete && abierto && entrega.conPaquete) {
                     entrega.retirarPaquete(horaMs)
+                } else {
+                    entrega
+                }
+
+            ComandoRobot.DescargarEnRecepcion ->
+                if (entrega.fase == FaseEntrega.DescargaEnRecepcion) {
+                    entrega.cambiarFase(FaseEntrega.Finalizada, ahoraMs)
+                        .copy(conPaquete = false, compartimento = EstadoCompartimento.CerradoTrabado)
                 } else {
                     entrega
                 }
@@ -404,11 +473,14 @@ internal class SimuladorRobot(
             )
         }
         val segundosTotal = (ahoraMs - inicioSimuladorMs) / INTERVALO_MS
+        val bateriaEstimada = 86 - (segundosTotal / 6).coerceAtMost(6).toInt()
         val base = TelemetriaRobot(
             latenciaMs = 24 + (segundosTotal % 7).toInt(),
-            bateria = 86 - (segundosTotal / 6).coerceAtMost(6).toInt(),
+            bateria = if (operacion.bateriaForzada) LIMITE_BATERIA_INICIO else bateriaEstimada,
             ultimaActualizacionMs = horaMs,
-            ultimaEntrega = operacion.ultimaEntrega
+            ultimaEntrega = operacion.ultimaEntrega,
+            bateriaForzada = operacion.bateriaForzada,
+            trayectoBloqueado = operacion.trayectoBloqueado
         )
         val entrega = operacion.entrega
         val detencion = operacion.detencionSinEntrega
@@ -423,23 +495,45 @@ internal class SimuladorRobot(
             )
             else -> leerPrueba(base, operacion.inicioPruebaMs, ahoraMs)
         }
-        val alertas = if (lectura.compartimento == EstadoCompartimento.Abierto) {
-            listOf(
-                AlertaRobot(
-                    "Compartimento abierto",
-                    "Cerrá y trabá el compartimento antes de mover el G1.",
-                    reconocida = operacion.compartimentoReconocido
-                )
-            )
-        } else {
-            emptyList()
-        }
         return lectura.copy(
             respuestaOrden = respuesta,
             rechazoPreparado = operacion.rechazoPreparado,
-            alertas = alertas,
+            alertas = alertasActivas(lectura, operacion.alertasReconocidas),
             conexionRecuperada = operacion.conexionRecuperada
         )
+    }
+
+    private fun alertasActivas(
+        lectura: TelemetriaRobot,
+        reconocidas: Set<TipoAlertaRobot>
+    ): List<AlertaRobot> = buildList {
+        if (lectura.trayectoBloqueado) {
+            val tipo = TipoAlertaRobot.Obstaculo
+            add(AlertaRobot(
+                tipo,
+                "Obstáculo en el trayecto",
+                "El G1 se detuvo. Retirá el obstáculo para habilitar el movimiento.",
+                tipo in reconocidas
+            ))
+        }
+        if (lectura.bateria <= LIMITE_BATERIA_INICIO) {
+            val tipo = TipoAlertaRobot.BateriaBaja
+            add(AlertaRobot(
+                tipo,
+                "Batería baja · ${lectura.bateria} %",
+                "Se bloqueó el inicio de otra entrega. Solicitá el regreso si está habilitado.",
+                tipo in reconocidas
+            ))
+        }
+        if (lectura.compartimento == EstadoCompartimento.Abierto) {
+            val tipo = TipoAlertaRobot.CompartimentoAbierto
+            add(AlertaRobot(
+                tipo,
+                "Compartimento abierto",
+                "Cerrá y trabá el compartimento antes de mover el G1.",
+                tipo in reconocidas
+            ))
+        }
     }
 
     private fun leerPrueba(base: TelemetriaRobot, inicioMs: Long?, ahoraMs: Long): TelemetriaRobot {

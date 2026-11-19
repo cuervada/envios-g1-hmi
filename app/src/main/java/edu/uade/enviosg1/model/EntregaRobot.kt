@@ -17,6 +17,7 @@ internal enum class FaseEntrega {
     Pausada,
     Cancelada,
     Detenida,
+    DescargaEnRecepcion,
     Finalizada
 }
 

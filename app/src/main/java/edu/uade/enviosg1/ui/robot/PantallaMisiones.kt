@@ -30,6 +30,7 @@ import edu.uade.enviosg1.model.FaseEntrega
 import edu.uade.enviosg1.model.LIMITE_BATERIA_INICIO
 import edu.uade.enviosg1.model.OrdenRobot
 import edu.uade.enviosg1.model.TelemetriaRobot
+import edu.uade.enviosg1.model.TipoAlertaRobot
 import edu.uade.enviosg1.model.puedeEnviar
 import edu.uade.enviosg1.ui.Aviso
 import edu.uade.enviosg1.ui.BotonPrincipal
@@ -89,15 +90,31 @@ internal fun Misiones(
             }
             TituloPantalla(titulo, subtitulo)
             TarjetaEstadoOperativo(lectura)
-            ProgresoRecorrido(destino, lectura.mision?.progreso ?: 0, entrega.esRegreso)
+            ProgresoRecorrido(destino, lectura.mision?.progreso ?: 0, entrega.esRegreso, entrega.retiroConfirmadoMs == null)
+            lectura.alertas.filter { it.tipo != TipoAlertaRobot.CompartimentoAbierto }.forEach { AvisoAlerta(it) }
             AvisoRespuesta(respuesta)
             BotonSecundario("Ver telemetría", alVerTelemetria)
         }
 
-        FaseEntrega.Finalizada -> {
-            TituloPantalla("Entrega finalizada", subtitulo)
+        FaseEntrega.DescargaEnRecepcion -> {
+            TituloPantalla("Regreso con paquete", subtitulo)
             TarjetaEstadoOperativo(lectura)
-            Aviso("Entregada", "El paquete fue retirado y el G1 regresó a Recepción.", TipoAviso.Positivo)
+            Aviso("Descarga pendiente", "El paquete volvió a Recepción.", TipoAviso.Advertencia)
+            BotonPrincipal(
+                "Descargar en Recepción",
+                { enviar(ComandoRobot.DescargarEnRecepcion) },
+                enabled = lectura.conectado && lectura.respuestaOrden?.estado != EstadoOrden.Pendiente
+            )
+        }
+        FaseEntrega.Finalizada -> {
+            val entregada = entrega.retiroConfirmadoMs != null
+            TituloPantalla(if (entregada) "Entrega finalizada" else "Regreso finalizado", subtitulo)
+            TarjetaEstadoOperativo(lectura)
+            if (entregada) {
+                Aviso("Entregada", "El paquete fue retirado y el G1 regresó a Recepción.", TipoAviso.Positivo)
+            } else {
+                Aviso("Paquete en Recepción", "El paquete se descargó en la base.", TipoAviso.Positivo)
+            }
             BotonPrincipal("Volver al panel", alVolverAlPanel)
         }
     }
@@ -184,8 +201,9 @@ private fun Recorrido(
 ) {
     TituloPantalla(if (regresando) "Regresando a base" else destino.nombre, subtitulo)
     TarjetaEstadoOperativo(lectura)
-    ProgresoRecorrido(destino, lectura.mision?.progreso ?: 0, regresando)
+    ProgresoRecorrido(destino, lectura.mision?.progreso ?: 0, regresando, lectura.entrega?.retiroConfirmadoMs == null)
     lectura.mision?.let { TextoSecundario(it.etapa) }
+    lectura.alertas.filter { it.tipo == TipoAlertaRobot.BateriaBaja }.forEach { AvisoAlerta(it) }
     AvisoRespuesta(lectura.respuestaOrden)
     BotonSecundario("Abrir controles", alAbrirControles)
     BotonSecundario("Ver telemetría", alVerTelemetria)
@@ -238,10 +256,20 @@ private fun Retiro(
 }
 
 @Composable
-private fun ProgresoRecorrido(destino: DestinoEntrega, porcentaje: Int, regreso: Boolean = false) {
+private fun ProgresoRecorrido(
+    destino: DestinoEntrega,
+    porcentaje: Int,
+    regreso: Boolean = false,
+    sinRetiro: Boolean = false
+) {
     val colores = MaterialTheme.colorScheme
     val progreso = porcentaje / 100f
-    val inicio = if (regreso) destino.nombre else "Recepción"
+    val regresoAnticipado = regreso && sinRetiro
+    val inicio = when {
+        regresoAnticipado -> "Punto de retorno"
+        regreso -> destino.nombre
+        else -> "Recepción"
+    }
     val fin = if (regreso) "Recepción" else destino.nombre
     Tarjeta(altoMinimo = 97, radio = 14.dp, rellenoVertical = 10.dp) {
         FilaDatos("Progreso de misión", "$porcentaje %")
@@ -261,7 +289,9 @@ private fun ProgresoRecorrido(destino: DestinoEntrega, porcentaje: Int, regreso:
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             MarcaRecorrido(inicio, true, Alignment.Start)
-            MarcaRecorrido("Ascensor", porcentaje >= 36, Alignment.CenterHorizontally)
+            if (!regresoAnticipado) {
+                MarcaRecorrido("Ascensor", porcentaje >= 36, Alignment.CenterHorizontally)
+            }
             MarcaRecorrido(fin, porcentaje == 100, Alignment.End)
         }
     }

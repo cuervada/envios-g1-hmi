@@ -13,6 +13,9 @@ internal sealed interface ComandoRobot {
     data object CortarEnlace : ComandoRobot
     data object RecuperarEnlace : ComandoRobot
     data object ProbarDesconexion : ComandoRobot
+    data object AlternarBateriaBaja : ComandoRobot
+    data object AlternarObstaculo : ComandoRobot
+    data object DescargarEnRecepcion : ComandoRobot
 }
 
 internal enum class OrdenRobot(val titulo: String) : ComandoRobot {
@@ -50,7 +53,8 @@ internal fun TelemetriaRobot.motivoBloqueo(orden: OrdenRobot): String? {
     val habilitada = when (orden) {
         OrdenRobot.Iniciar -> puedeIniciarEntrega
         OrdenRobot.Pausar -> fase == FaseEntrega.EnCamino || fase == FaseEntrega.Regresando
-        OrdenRobot.Reanudar -> fase == FaseEntrega.Pausada && cerradaYTrabada
+        OrdenRobot.Reanudar -> fase == FaseEntrega.Pausada && cerradaYTrabada &&
+            !trayectoBloqueado && bateria > 0
         OrdenRobot.Cancelar -> fase != null && estado in estadosCancelables
         OrdenRobot.Regresar -> puedeRegresar
         OrdenRobot.Detener -> true
@@ -60,9 +64,18 @@ internal fun TelemetriaRobot.motivoBloqueo(orden: OrdenRobot): String? {
     return when (orden) {
         OrdenRobot.Iniciar -> "Verificá el destino, la batería, el paquete y la traba del compartimento."
         OrdenRobot.Pausar -> "El G1 debe estar en marcha para pausar la misión."
-        OrdenRobot.Reanudar -> "La misión debe estar en pausa y el compartimento cerrado y trabado."
+        OrdenRobot.Reanudar -> when {
+            trayectoBloqueado -> "Retirá el obstáculo para reanudar."
+            bateria <= 0 -> "El G1 necesita batería para moverse."
+            else -> "La misión debe estar en pausa y el compartimento cerrado y trabado."
+        }
         OrdenRobot.Cancelar -> "El G1 debe estar en camino, en pausa o esperando el retiro."
-        OrdenRobot.Regresar -> "Confirmá el retiro y cerrá y trabá el compartimento para regresar."
+        OrdenRobot.Regresar -> when {
+            trayectoBloqueado -> "Retirá el obstáculo para habilitar el regreso."
+            bateria <= 0 -> "El G1 necesita batería para regresar."
+            !cerradaYTrabada -> "Cerrá y trabá el compartimento para regresar."
+            else -> "El G1 debe estar fuera de Recepción y tener un trayecto de regreso disponible."
+        }
         OrdenRobot.Detener -> null
         OrdenRobot.ReconocerAlertas -> "Ya no hay alertas activas pendientes de reconocer."
     }

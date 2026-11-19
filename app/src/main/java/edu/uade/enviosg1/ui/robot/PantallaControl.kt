@@ -14,10 +14,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import edu.uade.enviosg1.model.ComandoRobot
+import edu.uade.enviosg1.model.EstadoCompartimento
 import edu.uade.enviosg1.model.EstadoOrden
+import edu.uade.enviosg1.model.FaseEntrega
 import edu.uade.enviosg1.model.OrdenRobot
 import edu.uade.enviosg1.model.RespuestaOrden
 import edu.uade.enviosg1.model.TelemetriaRobot
+import edu.uade.enviosg1.model.TipoAlertaRobot
 import edu.uade.enviosg1.model.puedeEnviar
 import edu.uade.enviosg1.ui.Aviso
 import edu.uade.enviosg1.ui.BotonPrincipal
@@ -60,6 +63,7 @@ internal fun Controles(
             FilaDatos("Progreso de misión", "${mision.progreso} %")
         }
     }
+    lectura.alertas.filter { it.tipo != TipoAlertaRobot.CompartimentoAbierto }.forEach { AvisoAlerta(it) }
     AvisoRespuesta(lectura.respuestaOrden)
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -71,6 +75,16 @@ internal fun Controles(
                 containerColor = TipoAviso.Error.texto,
                 contentColor = Color.White
             )
+        )
+        BotonSecundario(
+            if (lectura.trayectoBloqueado) "Retirar obstáculo" else "Simular obstáculo",
+            { enviar(ComandoRobot.AlternarObstaculo) },
+            enabled = lectura.puedeSimularObstaculo
+        )
+        BotonSecundario(
+            if (lectura.bateriaForzada) "Restablecer batería" else "Simular batería baja",
+            { enviar(ComandoRobot.AlternarBateriaBaja) },
+            enabled = lectura.conectado
         )
         BotonSecundario(
             OrdenRobot.Pausar.titulo,
@@ -87,6 +101,27 @@ internal fun Controles(
             { confirmarCancelacion = true },
             enabled = lectura.puedeEnviar(OrdenRobot.Cancelar)
         )
+        val fase = entrega?.fase
+        if (lectura.compartimento == EstadoCompartimento.Abierto &&
+            (fase == FaseEntrega.RetirandoPaquete || fase == FaseEntrega.RetiroConfirmado ||
+                fase == FaseEntrega.Cancelada || fase == FaseEntrega.Detenida)
+        ) {
+            BotonSecundario(
+                "Cerrar y trabar",
+                { enviar(ComandoRobot.CerrarYTrabar) },
+                enabled = lectura.conectado && lectura.respuestaOrden?.estado != EstadoOrden.Pendiente
+            )
+        }
+        if (entrega != null &&
+            (lectura.puedeRegresar || !entrega.esRegreso) &&
+            fase != FaseEntrega.Finalizada
+        ) {
+            BotonSecundario(
+                "Solicitar regreso a punto seguro",
+                { enviar(OrdenRobot.Regresar) },
+                enabled = lectura.puedeEnviar(OrdenRobot.Regresar)
+            )
+        }
         BotonForzarRechazo(lectura, enviar)
         BotonSecundario("Volver", alVolver)
     }

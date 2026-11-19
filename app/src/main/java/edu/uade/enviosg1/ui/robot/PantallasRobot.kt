@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import edu.uade.enviosg1.model.AlertaRobot
 import edu.uade.enviosg1.model.ComandoRobot
 import edu.uade.enviosg1.model.EstadoCompartimento
 import edu.uade.enviosg1.model.EstadoOperativo
@@ -54,10 +55,11 @@ internal fun Panel(
         FilasLectura(filas)
     }
 
-    val alerta = lectura.alertas.firstOrNull()
     val mision = lectura.mision
     when {
-        alerta != null -> Aviso(alerta.titulo, alerta.detalle, TipoAviso.Advertencia)
+        lectura.alertas.isNotEmpty() -> lectura.alertas.forEach { AvisoAlerta(it) }
+        lectura.entrega?.fase == FaseEntrega.DescargaEnRecepcion ->
+            Aviso("Descarga pendiente", "Retirá el paquete en Recepción.", TipoAviso.Advertencia)
         lectura.estado == EstadoOperativo.Detenido -> Aviso(
             estado,
             mision?.etapa ?: "El G1 está inmóvil.",
@@ -148,10 +150,7 @@ internal fun Alertas(lectura: TelemetriaRobot, enviar: (ComandoRobot) -> Unit, a
             Aviso("Sin alertas activas", "El enlace y el compartimento funcionan correctamente.", TipoAviso.Positivo)
         }
     } else {
-        lectura.alertas.forEach { alerta ->
-            val titulo = if (alerta.reconocida) "${alerta.titulo} · Reconocida" else alerta.titulo
-            Aviso(titulo, alerta.detalle, TipoAviso.Advertencia)
-        }
+        lectura.alertas.forEach { AvisoAlerta(it) }
         BotonPrincipal(
             OrdenRobot.ReconocerAlertas.titulo,
             { enviar(OrdenRobot.ReconocerAlertas) },
@@ -160,6 +159,12 @@ internal fun Alertas(lectura: TelemetriaRobot, enviar: (ComandoRobot) -> Unit, a
     }
     AvisoRespuesta(lectura.respuestaOrden?.takeIf { it.orden == OrdenRobot.ReconocerAlertas })
     BotonSecundario("Volver al panel", alVolver)
+}
+
+@Composable
+internal fun AvisoAlerta(alerta: AlertaRobot) {
+    val titulo = if (alerta.reconocida) "${alerta.titulo} · Reconocida" else alerta.titulo
+    Aviso(titulo, alerta.detalle, TipoAviso.Advertencia)
 }
 
 @Composable
