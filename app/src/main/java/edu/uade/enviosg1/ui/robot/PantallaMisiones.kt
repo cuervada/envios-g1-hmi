@@ -25,9 +25,12 @@ import edu.uade.enviosg1.model.ComandoRobot
 import edu.uade.enviosg1.model.DestinoEntrega
 import edu.uade.enviosg1.model.EntregaRobot
 import edu.uade.enviosg1.model.EstadoCompartimento
+import edu.uade.enviosg1.model.EstadoOrden
 import edu.uade.enviosg1.model.FaseEntrega
 import edu.uade.enviosg1.model.LIMITE_BATERIA_INICIO
+import edu.uade.enviosg1.model.OrdenRobot
 import edu.uade.enviosg1.model.TelemetriaRobot
+import edu.uade.enviosg1.model.puedeEnviar
 import edu.uade.enviosg1.ui.Aviso
 import edu.uade.enviosg1.ui.BotonPrincipal
 import edu.uade.enviosg1.ui.BotonSecundario
@@ -42,6 +45,7 @@ internal fun Misiones(
     lectura: TelemetriaRobot,
     enviar: (ComandoRobot) -> Unit,
     alVerTelemetria: () -> Unit,
+    alAbrirControles: () -> Unit,
     alVolverAlPanel: () -> Unit
 ) {
     val entrega = lectura.entrega
@@ -51,22 +55,44 @@ internal fun Misiones(
         return
     }
     val subtitulo = "Misión ${entrega.codigo} · ${destino.nombre}"
+    val respuesta = lectura.respuestaOrden
+    if (respuesta?.orden == OrdenRobot.Iniciar && respuesta.estado == EstadoOrden.Pendiente) {
+        TituloPantalla("Inicio de misión", subtitulo)
+        TarjetaEstadoOperativo(lectura)
+        ProgresoRecorrido(destino, 0)
+        AvisoRespuesta(respuesta)
+        BotonPrincipal("Iniciar misión", { enviar(OrdenRobot.Iniciar) }, enabled = false)
+        BotonSecundario("Abrir controles", alAbrirControles)
+        return
+    }
     when (entrega.fase) {
         FaseEntrega.Preparando -> Preparacion(lectura, destino, enviar)
-        FaseEntrega.InicioPendiente -> {
-            TituloPantalla("Inicio de misión", subtitulo)
-            TarjetaEstadoOperativo(lectura)
-            ProgresoRecorrido(destino, 0)
-            Aviso("Pendiente · Iniciar misión", "Esperando la confirmación del G1.", TipoAviso.Advertencia)
-            BotonPrincipal("Iniciar misión", { enviar(ComandoRobot.IniciarMision) }, enabled = false)
-        }
-        FaseEntrega.EnCamino, FaseEntrega.Regresando ->
-            Recorrido(lectura, destino, subtitulo, entrega.fase == FaseEntrega.Regresando, alVerTelemetria)
+        FaseEntrega.EnCamino, FaseEntrega.Regresando -> Recorrido(
+            lectura,
+            destino,
+            subtitulo,
+            entrega.esRegreso,
+            alVerTelemetria,
+            alAbrirControles
+        )
 
         FaseEntrega.EsperandoRetiro,
         FaseEntrega.RetirandoPaquete,
         FaseEntrega.RetiroConfirmado,
         FaseEntrega.ListaParaRegresar -> Retiro(lectura, entrega, destino, subtitulo, enviar)
+
+        FaseEntrega.Pausada, FaseEntrega.Cancelada, FaseEntrega.Detenida -> {
+            val titulo = when (entrega.fase) {
+                FaseEntrega.Pausada -> "Misión en pausa"
+                FaseEntrega.Cancelada -> "Misión cancelada"
+                else -> "Detención operativa"
+            }
+            TituloPantalla(titulo, subtitulo)
+            TarjetaEstadoOperativo(lectura)
+            ProgresoRecorrido(destino, lectura.mision?.progreso ?: 0, entrega.esRegreso)
+            AvisoRespuesta(respuesta)
+            BotonSecundario("Ver telemetría", alVerTelemetria)
+        }
 
         FaseEntrega.Finalizada -> {
             TituloPantalla("Entrega finalizada", subtitulo)
@@ -74,6 +100,9 @@ internal fun Misiones(
             Aviso("Entregada", "El paquete fue retirado y el G1 regresó a Recepción.", TipoAviso.Positivo)
             BotonPrincipal("Volver al panel", alVolverAlPanel)
         }
+    }
+    if (entrega.fase !in listOf(FaseEntrega.EnCamino, FaseEntrega.Regresando, FaseEntrega.Finalizada)) {
+        BotonSecundario("Abrir controles", alAbrirControles)
     }
 }
 
@@ -126,18 +155,21 @@ private fun Preparacion(
         Aviso("Preparación pendiente", detalle, TipoAviso.Advertencia)
     }
 
+    AvisoRespuesta(lectura.respuestaOrden)
+    val puedePrepararCarga = lectura.conectado && lectura.respuestaOrden?.estado != EstadoOrden.Pendiente
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        BotonPrincipal("Iniciar misión", { enviar(ComandoRobot.IniciarMision) }, lectura.puedeIniciarEntrega)
+        BotonPrincipal("Iniciar misión", { enviar(OrdenRobot.Iniciar) }, lectura.puedeEnviar(OrdenRobot.Iniciar))
         when {
             lectura.compartimento == EstadoCompartimento.CerradoTrabado ->
-                BotonSecundario("Abrir compartimento", { enviar(ComandoRobot.AbrirCompartimento) })
+                BotonSecundario("Abrir compartimento", { enviar(ComandoRobot.AbrirCompartimento) }, puedePrepararCarga)
 
             !lectura.conPaquete ->
-                BotonSecundario("Simular carga del paquete", { enviar(ComandoRobot.CargarPaquete) })
+                BotonSecundario("Simular carga del paquete", { enviar(ComandoRobot.CargarPaquete) }, puedePrepararCarga)
 
-            else -> BotonSecundario("Cerrar y trabar", { enviar(ComandoRobot.CerrarYTrabar) })
+            else -> BotonSecundario("Cerrar y trabar", { enviar(ComandoRobot.CerrarYTrabar) }, puedePrepararCarga)
         }
-        BotonSecundario("Cambiar destino", { enviar(ComandoRobot.CambiarDestino) })
+        BotonSecundario("Cambiar destino", { enviar(ComandoRobot.CambiarDestino) }, puedePrepararCarga)
+        BotonForzarRechazo(lectura, enviar)
     }
 }
 
@@ -147,16 +179,15 @@ private fun Recorrido(
     destino: DestinoEntrega,
     subtitulo: String,
     regresando: Boolean,
-    alVerTelemetria: () -> Unit
+    alVerTelemetria: () -> Unit,
+    alAbrirControles: () -> Unit
 ) {
     TituloPantalla(if (regresando) "Regresando a base" else destino.nombre, subtitulo)
     TarjetaEstadoOperativo(lectura)
     ProgresoRecorrido(destino, lectura.mision?.progreso ?: 0, regresando)
-    Aviso(
-        if (regresando) "Confirmada · Solicitar regreso" else "Confirmada · Iniciar misión",
-        lectura.mision?.etapa.orEmpty(),
-        TipoAviso.Positivo
-    )
+    lectura.mision?.let { TextoSecundario(it.etapa) }
+    AvisoRespuesta(lectura.respuestaOrden)
+    BotonSecundario("Abrir controles", alAbrirControles)
     BotonSecundario("Ver telemetría", alVerTelemetria)
 }
 
@@ -177,27 +208,29 @@ private fun Retiro(
     TituloPantalla(titulo, subtitulo)
     TarjetaEstadoOperativo(lectura)
     ProgresoRecorrido(destino, 100)
+    AvisoRespuesta(lectura.respuestaOrden?.takeIf { it.orden == OrdenRobot.Regresar })
+    val puedeOperar = lectura.conectado && lectura.respuestaOrden?.estado != EstadoOrden.Pendiente
 
     when (entrega.fase) {
         FaseEntrega.EsperandoRetiro -> {
             val tiempo = lectura.esperaRestanteSegundos?.let(::formatearEspera) ?: "—"
             Aviso("Tiempo para retirar · $tiempo", "El G1 espera en la puerta de la oficina.", TipoAviso.Advertencia)
-            BotonPrincipal("Simular retiro del paquete", { enviar(ComandoRobot.AbrirCompartimento) })
+            BotonPrincipal("Simular retiro del paquete", { enviar(ComandoRobot.AbrirCompartimento) }, puedeOperar)
         }
         FaseEntrega.RetirandoPaquete -> {
             Aviso("Compartimento abierto", "Retirá el paquete y confirmá el retiro.", TipoAviso.Advertencia)
-            BotonPrincipal("Confirmar retiro", { enviar(ComandoRobot.ConfirmarRetiro) })
+            BotonPrincipal("Confirmar retiro", { enviar(ComandoRobot.ConfirmarRetiro) }, puedeOperar)
         }
         FaseEntrega.RetiroConfirmado -> {
             Aviso("Sin carga", "El sensor de carga indica que el compartimento está vacío. Cerrá y trabá para volver.", TipoAviso.Positivo)
-            BotonPrincipal("Cerrar y trabar", { enviar(ComandoRobot.CerrarYTrabar) })
+            BotonPrincipal("Cerrar y trabar", { enviar(ComandoRobot.CerrarYTrabar) }, puedeOperar)
         }
         FaseEntrega.ListaParaRegresar -> {
             Aviso("Cerrado y trabado", "El supervisor puede solicitar el regreso.", TipoAviso.Positivo)
             BotonPrincipal(
                 "Solicitar regreso a punto seguro",
-                { enviar(ComandoRobot.SolicitarRegreso) },
-                enabled = lectura.puedeRegresar
+                { enviar(OrdenRobot.Regresar) },
+                enabled = lectura.puedeEnviar(OrdenRobot.Regresar)
             )
         }
         else -> Unit

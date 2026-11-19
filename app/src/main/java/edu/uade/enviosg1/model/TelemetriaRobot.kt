@@ -5,7 +5,9 @@ internal enum class EstadoOperativo {
     Preparando,
     EnCamino,
     EsperandoRetiro,
-    RegresandoABase
+    RegresandoABase,
+    Pausado,
+    Detenido
 }
 
 internal enum class EstadoCompartimento {
@@ -21,7 +23,8 @@ internal data class MisionRobot(
 
 internal data class AlertaRobot(
     val titulo: String,
-    val detalle: String
+    val detalle: String,
+    val reconocida: Boolean = false
 )
 
 internal data class TelemetriaRobot(
@@ -37,7 +40,9 @@ internal data class TelemetriaRobot(
     val conPaquete: Boolean = false,
     val esperaRestanteSegundos: Int? = null,
     val entrega: EntregaRobot? = null,
-    val ultimaEntrega: EntregaRegistrada? = null
+    val ultimaEntrega: EntregaRegistrada? = null,
+    val respuestaOrden: RespuestaOrden? = null,
+    val rechazoPreparado: Boolean = false
 ) {
     val conectado: Boolean
         get() = latenciaMs != null

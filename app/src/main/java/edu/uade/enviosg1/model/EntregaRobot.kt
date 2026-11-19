@@ -8,13 +8,15 @@ internal enum class DestinoEntrega(val nombre: String, val sector: String) {
 
 internal enum class FaseEntrega {
     Preparando,
-    InicioPendiente,
     EnCamino,
     EsperandoRetiro,
     RetirandoPaquete,
     RetiroConfirmado,
     ListaParaRegresar,
     Regresando,
+    Pausada,
+    Cancelada,
+    Detenida,
     Finalizada
 }
 
@@ -22,7 +24,8 @@ internal data class EntregaRobot(
     val numero: Int,
     val destino: DestinoEntrega?,
     val fase: FaseEntrega = FaseEntrega.Preparando,
-    val retiroConfirmadoMs: Long? = null
+    val retiroConfirmadoMs: Long? = null,
+    val esRegreso: Boolean = false
 ) {
     val codigo: String
         get() = "G1-" + numero.toString().padStart(3, '0')
@@ -34,16 +37,3 @@ internal data class EntregaRegistrada(
     val retiroConfirmadoMs: Long,
     val regresoMs: Long
 )
-
-internal sealed interface ComandoRobot {
-    data object ProbarTelemetria : ComandoRobot
-    data object NuevaEntrega : ComandoRobot
-    data class ElegirDestino(val destino: DestinoEntrega) : ComandoRobot
-    data object CambiarDestino : ComandoRobot
-    data object AbrirCompartimento : ComandoRobot
-    data object CargarPaquete : ComandoRobot
-    data object CerrarYTrabar : ComandoRobot
-    data object IniciarMision : ComandoRobot
-    data object ConfirmarRetiro : ComandoRobot
-    data object SolicitarRegreso : ComandoRobot
-}

@@ -11,10 +11,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import edu.uade.enviosg1.model.AlertaRobot
+import edu.uade.enviosg1.model.ComandoRobot
 import edu.uade.enviosg1.model.EstadoCompartimento
 import edu.uade.enviosg1.model.EstadoOperativo
 import edu.uade.enviosg1.model.FaseEntrega
+import edu.uade.enviosg1.model.OrdenRobot
+import edu.uade.enviosg1.model.puedeEnviar
 import edu.uade.enviosg1.model.TelemetriaRobot
 import edu.uade.enviosg1.ui.Aviso
 import edu.uade.enviosg1.ui.BotonPrincipal
@@ -34,7 +36,8 @@ private val formatoLocal = Locale.forLanguageTag("es-AR")
 internal fun Panel(
     lectura: TelemetriaRobot,
     alPrepararEntrega: () -> Unit,
-    alVerTelemetria: () -> Unit
+    alVerTelemetria: () -> Unit,
+    alAbrirControles: () -> Unit
 ) {
     val estado = lectura.estado.texto()
     TituloPantalla("Panel de supervisión", lectura.ubicacion)
@@ -54,6 +57,16 @@ internal fun Panel(
     val mision = lectura.mision
     when {
         alerta != null -> Aviso(alerta.titulo, alerta.detalle, TipoAviso.Advertencia)
+        lectura.estado == EstadoOperativo.Detenido -> Aviso(
+            estado,
+            mision?.etapa ?: "El G1 está inmóvil.",
+            TipoAviso.Error
+        )
+        lectura.estado == EstadoOperativo.Pausado && mision != null -> Aviso(
+            estado,
+            "Progreso del recorrido · ${mision.progreso} %",
+            TipoAviso.Advertencia
+        )
         mision != null -> Aviso(estado, "${mision.etapa} · ${mision.progreso} %", TipoAviso.Positivo)
         else -> Aviso("Disponible", "Prepará una entrega para enviar un paquete.", TipoAviso.Positivo)
     }
@@ -66,6 +79,7 @@ internal fun Panel(
             enabled = tieneEntregaActiva || lectura.estado == EstadoOperativo.Disponible
         )
         BotonSecundario("Ver telemetría", alVerTelemetria)
+        BotonSecundario("Abrir controles", alAbrirControles)
     }
 }
 
@@ -118,13 +132,22 @@ internal fun Telemetria(
 }
 
 @Composable
-internal fun Alertas(alertas: List<AlertaRobot>, alVolver: () -> Unit) {
+internal fun Alertas(lectura: TelemetriaRobot, enviar: (ComandoRobot) -> Unit, alVolver: () -> Unit) {
     TituloPantalla("Alertas", "G1-01 · Estado e incidencias")
-    if (alertas.isEmpty()) {
+    if (lectura.alertas.isEmpty()) {
         Aviso("Sin alertas activas", "El enlace y el compartimento funcionan correctamente.", TipoAviso.Positivo)
     } else {
-        alertas.forEach { alerta -> Aviso(alerta.titulo, alerta.detalle, TipoAviso.Advertencia) }
+        lectura.alertas.forEach { alerta ->
+            val titulo = if (alerta.reconocida) "${alerta.titulo} · Reconocida" else alerta.titulo
+            Aviso(titulo, alerta.detalle, TipoAviso.Advertencia)
+        }
+        BotonPrincipal(
+            OrdenRobot.ReconocerAlertas.titulo,
+            { enviar(OrdenRobot.ReconocerAlertas) },
+            enabled = lectura.puedeEnviar(OrdenRobot.ReconocerAlertas)
+        )
     }
+    AvisoRespuesta(lectura.respuestaOrden?.takeIf { it.orden == OrdenRobot.ReconocerAlertas })
     BotonSecundario("Volver al panel", alVolver)
 }
 
@@ -163,6 +186,8 @@ private fun EstadoOperativo.texto() = when (this) {
     EstadoOperativo.EnCamino -> "En camino"
     EstadoOperativo.EsperandoRetiro -> "Esperando retiro"
     EstadoOperativo.RegresandoABase -> "Regresando a base"
+    EstadoOperativo.Pausado -> "Pausado"
+    EstadoOperativo.Detenido -> "Detenido"
 }
 
 internal fun EstadoCompartimento.texto() = when (this) {

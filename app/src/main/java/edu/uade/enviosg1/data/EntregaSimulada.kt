@@ -9,17 +9,24 @@ import edu.uade.enviosg1.model.FaseEntrega
 import edu.uade.enviosg1.model.MisionRobot
 import edu.uade.enviosg1.model.TelemetriaRobot
 
-private const val CONFIRMACION_MS = 1_000L
 private const val TRAYECTO_MS = 10_000L
 private const val ESPERA_RETIRO_SEGUNDOS = 4 * 60 + 30
 private const val VELOCIDAD_MARCHA = 0.6
+
+internal data class PosicionGuardada(
+    val fase: FaseEntrega,
+    val recorridoMs: Long,
+    val ubicacion: String,
+    val progreso: Int
+)
 
 internal data class EntregaSimulada(
     val datos: EntregaRobot,
     val inicioFaseMs: Long,
     val compartimento: EstadoCompartimento = EstadoCompartimento.CerradoTrabado,
     val conPaquete: Boolean = false,
-    val finRegresoEpochMs: Long? = null
+    val finRegresoEpochMs: Long? = null,
+    private val posicionGuardada: PosicionGuardada? = null
 ) {
     val fase: FaseEntrega
         get() = datos.fase
@@ -28,19 +35,34 @@ internal data class EntregaSimulada(
         copy(datos = datos.copy(fase = nuevaFase), inicioFaseMs = ahoraMs)
 
     fun avanzar(ahoraMs: Long): EntregaSimulada {
-        val salidaMs = inicioFaseMs + CONFIRMACION_MS
-        val entrega = if (fase == FaseEntrega.InicioPendiente && ahoraMs >= salidaMs) {
-            cambiarFase(FaseEntrega.EnCamino, salidaMs)
+        val finTrayectoMs = inicioFaseMs + TRAYECTO_MS
+        if (ahoraMs < finTrayectoMs) return this
+        return when (fase) {
+            FaseEntrega.EnCamino -> cambiarFase(FaseEntrega.EsperandoRetiro, finTrayectoMs)
+            FaseEntrega.Regresando -> cambiarFase(FaseEntrega.Finalizada, finTrayectoMs)
+            else -> this
+        }
+    }
+
+    fun inmovilizar(nuevaFase: FaseEntrega, lectura: TelemetriaRobot, ahoraMs: Long): EntregaSimulada {
+        val posicion = posicionGuardada ?: PosicionGuardada(
+            fase = fase,
+            recorridoMs = (ahoraMs - inicioFaseMs).coerceIn(0, TRAYECTO_MS),
+            ubicacion = lectura.ubicacion,
+            progreso = lectura.mision?.progreso ?: 0
+        )
+        return cambiarFase(nuevaFase, ahoraMs).copy(posicionGuardada = posicion)
+    }
+
+    fun reanudar(ahoraMs: Long, horaMs: Long): EntregaSimulada {
+        val guardada = checkNotNull(posicionGuardada)
+        val finRegreso = if (guardada.fase == FaseEntrega.Regresando) {
+            horaMs + (TRAYECTO_MS - guardada.recorridoMs)
         } else {
-            this
+            null
         }
-        val finTrayectoMs = entrega.inicioFaseMs + TRAYECTO_MS
-        if (ahoraMs < finTrayectoMs) return entrega
-        return when (entrega.fase) {
-            FaseEntrega.EnCamino -> entrega.cambiarFase(FaseEntrega.EsperandoRetiro, finTrayectoMs)
-            FaseEntrega.Regresando -> entrega.cambiarFase(FaseEntrega.Finalizada, finTrayectoMs)
-            else -> entrega
-        }
+        return cambiarFase(guardada.fase, ahoraMs - guardada.recorridoMs)
+            .copy(posicionGuardada = null, finRegresoEpochMs = finRegreso)
     }
 
     fun retirarPaquete(horaMs: Long) = copy(
@@ -48,8 +70,11 @@ internal data class EntregaSimulada(
         conPaquete = false
     )
 
-    fun iniciarRegreso(ahoraMs: Long, horaMs: Long) =
-        cambiarFase(FaseEntrega.Regresando, ahoraMs).copy(finRegresoEpochMs = horaMs + TRAYECTO_MS)
+    fun iniciarRegreso(ahoraMs: Long, horaMs: Long) = copy(
+        datos = datos.copy(fase = FaseEntrega.Regresando, esRegreso = true),
+        inicioFaseMs = ahoraMs,
+        finRegresoEpochMs = horaMs + TRAYECTO_MS
+    )
 
     fun registro() = EntregaRegistrada(
         codigo = datos.codigo,
@@ -60,24 +85,26 @@ internal data class EntregaSimulada(
 
     fun aplicarALectura(base: TelemetriaRobot, ahoraMs: Long): TelemetriaRobot {
         if (fase == FaseEntrega.Finalizada) return base.copy(entrega = datos)
-
         val destino = datos.destino
         val estado = when (fase) {
-            FaseEntrega.Preparando, FaseEntrega.InicioPendiente -> EstadoOperativo.Preparando
+            FaseEntrega.Preparando -> EstadoOperativo.Preparando
             FaseEntrega.EnCamino -> EstadoOperativo.EnCamino
             FaseEntrega.Regresando -> EstadoOperativo.RegresandoABase
+            FaseEntrega.Pausada -> EstadoOperativo.Pausado
+            FaseEntrega.Cancelada, FaseEntrega.Detenida -> EstadoOperativo.Detenido
             else -> EstadoOperativo.EsperandoRetiro
         }
         val enMarcha = estado == EstadoOperativo.EnCamino || estado == EstadoOperativo.RegresandoABase
         val progreso = when {
+            posicionGuardada != null -> posicionGuardada.progreso
             enMarcha -> (((ahoraMs - inicioFaseMs) * 100) / TRAYECTO_MS).coerceIn(0, 99).toInt()
             estado == EstadoOperativo.EsperandoRetiro -> 100
             else -> 0
         }
         val (etapa, ubicacion) = when {
+            posicionGuardada != null -> descripcionInmovil() to posicionGuardada.ubicacion
             destino == null -> "Elegí un destino" to base.ubicacion
             fase == FaseEntrega.Preparando -> "Preparando entrega" to base.ubicacion
-            fase == FaseEntrega.InicioPendiente -> "Esperando confirmación" to base.ubicacion
             fase == FaseEntrega.EnCamino -> tramoDeIda(destino, progreso)
             fase == FaseEntrega.Regresando -> tramoDeRegreso(destino, progreso)
             else -> "En la puerta de la oficina" to "Piso 2 · ${destino.nombre}"
@@ -97,6 +124,12 @@ internal data class EntregaSimulada(
             esperaRestanteSegundos = espera,
             entrega = datos
         )
+    }
+
+    private fun descripcionInmovil() = when (fase) {
+        FaseEntrega.Pausada -> "Misión en pausa"
+        FaseEntrega.Cancelada -> "Misión cancelada"
+        else -> "Detención operativa"
     }
 }
 

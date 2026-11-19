@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonColors
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -33,7 +34,8 @@ private val botonForma = RoundedCornerShape(11.dp)
 
 internal enum class TipoAviso(val fondo: Color, val texto: Color) {
     Positivo(Color(0xFFDFF4E9), Color(0xFF08704A)),
-    Advertencia(Color(0xFFFFF0CA), Color(0xFF765000))
+    Advertencia(Color(0xFFFFF0CA), Color(0xFF765000)),
+    Error(Color(0xFFFCE8E8), Color(0xFF9C2626))
 }
 
 @Composable
@@ -134,12 +136,18 @@ internal fun Aviso(titulo: String, detalle: String, tipo: TipoAviso) {
 }
 
 @Composable
-internal fun BotonPrincipal(texto: String, onClick: () -> Unit, enabled: Boolean = true) {
+internal fun BotonPrincipal(
+    texto: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    colores: ButtonColors = ButtonDefaults.buttonColors()
+) {
     Button(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         enabled = enabled,
-        shape = botonForma
+        shape = botonForma,
+        colors = colores
     ) {
         Text(texto, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
     }

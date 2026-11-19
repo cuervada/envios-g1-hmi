@@ -48,6 +48,7 @@ import edu.uade.enviosg1.model.EntregaRegistrada
 import edu.uade.enviosg1.model.EstadoOperativo
 import edu.uade.enviosg1.model.TelemetriaRobot
 import edu.uade.enviosg1.ui.robot.Alertas
+import edu.uade.enviosg1.ui.robot.Controles
 import edu.uade.enviosg1.ui.robot.Misiones
 import edu.uade.enviosg1.ui.robot.Panel
 import edu.uade.enviosg1.ui.robot.RobotViewModel
@@ -59,6 +60,7 @@ private enum class Pantalla(val etiqueta: String) {
     Seleccion("Seleccioná el robot"),
     Panel("Panel"),
     Telemetria("Telemetría"),
+    Control("Control"),
     Misiones("Misiones"),
     Alertas("Alertas"),
     Historial("Historial")
@@ -72,17 +74,17 @@ private val textoEncabezadoSecundario = Color(0xFFCBD4F2)
 internal fun EnviosG1App(robotViewModel: RobotViewModel) {
     val lectura by robotViewModel.telemetria.collectAsStateWithLifecycle()
     var pantalla by rememberSaveable { mutableStateOf(Pantalla.Seleccion) }
-    var origenTelemetria by rememberSaveable { mutableStateOf(Pantalla.Panel) }
+    var origenDetalle by rememberSaveable { mutableStateOf(Pantalla.Panel) }
 
-    fun abrirTelemetria(origen: Pantalla) {
-        origenTelemetria = origen
-        pantalla = Pantalla.Telemetria
+    fun abrirDetalle(detalle: Pantalla, origen: Pantalla) {
+        origenDetalle = origen
+        pantalla = detalle
     }
 
     BackHandler(enabled = pantalla != Pantalla.Seleccion) {
         pantalla = when (pantalla) {
             Pantalla.Panel -> Pantalla.Seleccion
-            Pantalla.Telemetria -> origenTelemetria
+            Pantalla.Telemetria, Pantalla.Control -> origenDetalle
             else -> Pantalla.Panel
         }
     }
@@ -93,7 +95,10 @@ internal fun EnviosG1App(robotViewModel: RobotViewModel) {
             if (pantalla == Pantalla.Seleccion) {
                 PieSeleccion()
             } else {
-                val pestanaActual = if (pantalla == Pantalla.Telemetria) origenTelemetria else pantalla
+                val pestanaActual = when (pantalla) {
+                    Pantalla.Telemetria, Pantalla.Control -> origenDetalle
+                    else -> pantalla
+                }
                 NavegacionInferior(pestanaActual) { pantalla = it }
             }
         },
@@ -119,20 +124,27 @@ internal fun EnviosG1App(robotViewModel: RobotViewModel) {
                             robotViewModel.enviar(ComandoRobot.NuevaEntrega)
                             pantalla = Pantalla.Misiones
                         },
-                        alVerTelemetria = { abrirTelemetria(Pantalla.Panel) }
+                        alVerTelemetria = { abrirDetalle(Pantalla.Telemetria, Pantalla.Panel) },
+                        alAbrirControles = { abrirDetalle(Pantalla.Control, Pantalla.Panel) }
                     )
                     Pantalla.Telemetria -> Telemetria(
                         lectura = lectura,
                         alProbar = { robotViewModel.enviar(ComandoRobot.ProbarTelemetria) },
-                        alVolver = { pantalla = origenTelemetria }
+                        alVolver = { pantalla = origenDetalle }
+                    )
+                    Pantalla.Control -> Controles(
+                        lectura = lectura,
+                        enviar = robotViewModel::enviar,
+                        alVolver = { pantalla = origenDetalle }
                     )
                     Pantalla.Misiones -> Misiones(
                         lectura = lectura,
                         enviar = robotViewModel::enviar,
-                        alVerTelemetria = { abrirTelemetria(Pantalla.Misiones) },
+                        alVerTelemetria = { abrirDetalle(Pantalla.Telemetria, Pantalla.Misiones) },
+                        alAbrirControles = { abrirDetalle(Pantalla.Control, Pantalla.Misiones) },
                         alVolverAlPanel = { pantalla = Pantalla.Panel }
                     )
-                    Pantalla.Alertas -> Alertas(lectura.alertas) { pantalla = Pantalla.Panel }
+                    Pantalla.Alertas -> Alertas(lectura, robotViewModel::enviar) { pantalla = Pantalla.Panel }
                     Pantalla.Historial -> Historial(lectura.ultimaEntrega) { pantalla = Pantalla.Panel }
                 }
             }
