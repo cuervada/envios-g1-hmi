@@ -4,7 +4,8 @@ internal enum class EstadoOperativo {
     Disponible,
     Preparando,
     EnCamino,
-    EsperandoRetiro
+    EsperandoRetiro,
+    RegresandoABase
 }
 
 internal enum class EstadoCompartimento {
@@ -23,10 +24,6 @@ internal data class AlertaRobot(
     val detalle: String
 )
 
-internal enum class ComandoRobot {
-    ProbarTelemetria
-}
-
 internal data class TelemetriaRobot(
     val latenciaMs: Int? = 24,
     val bateria: Int = 86,
@@ -38,8 +35,30 @@ internal data class TelemetriaRobot(
     val ultimaActualizacionMs: Long = System.currentTimeMillis(),
     val compartimento: EstadoCompartimento = EstadoCompartimento.CerradoTrabado,
     val conPaquete: Boolean = false,
-    val esperaRestanteSegundos: Int? = null
+    val esperaRestanteSegundos: Int? = null,
+    val entrega: EntregaRobot? = null,
+    val ultimaEntrega: EntregaRegistrada? = null
 ) {
     val conectado: Boolean
         get() = latenciaMs != null
+
+    val puedeElegirDestino: Boolean
+        get() = conectado &&
+            (estado == EstadoOperativo.Disponible || entrega?.fase == FaseEntrega.Preparando)
+
+    val puedeIniciarEntrega: Boolean
+        get() = conectado &&
+            bateria > LIMITE_BATERIA_INICIO &&
+            entrega?.fase == FaseEntrega.Preparando &&
+            entrega.destino != null &&
+            conPaquete &&
+            compartimento == EstadoCompartimento.CerradoTrabado
+
+    val puedeRegresar: Boolean
+        get() = conectado &&
+            bateria > 0 &&
+            entrega?.fase == FaseEntrega.ListaParaRegresar &&
+            entrega.retiroConfirmadoMs != null &&
+            !conPaquete &&
+            compartimento == EstadoCompartimento.CerradoTrabado
 }

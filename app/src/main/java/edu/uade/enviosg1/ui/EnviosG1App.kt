@@ -43,13 +43,17 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import edu.uade.enviosg1.model.ComandoRobot
+import edu.uade.enviosg1.model.EntregaRegistrada
 import edu.uade.enviosg1.model.EstadoOperativo
 import edu.uade.enviosg1.model.TelemetriaRobot
 import edu.uade.enviosg1.ui.robot.Alertas
+import edu.uade.enviosg1.ui.robot.Misiones
 import edu.uade.enviosg1.ui.robot.Panel
 import edu.uade.enviosg1.ui.robot.RobotViewModel
 import edu.uade.enviosg1.ui.robot.Telemetria
 import edu.uade.enviosg1.ui.robot.bateriaTexto
+import edu.uade.enviosg1.ui.robot.formatearHora
 
 private enum class Pantalla(val etiqueta: String) {
     Seleccion("Seleccioná el robot"),
@@ -68,9 +72,19 @@ private val textoEncabezadoSecundario = Color(0xFFCBD4F2)
 internal fun EnviosG1App(robotViewModel: RobotViewModel) {
     val lectura by robotViewModel.telemetria.collectAsStateWithLifecycle()
     var pantalla by rememberSaveable { mutableStateOf(Pantalla.Seleccion) }
+    var origenTelemetria by rememberSaveable { mutableStateOf(Pantalla.Panel) }
+
+    fun abrirTelemetria(origen: Pantalla) {
+        origenTelemetria = origen
+        pantalla = Pantalla.Telemetria
+    }
 
     BackHandler(enabled = pantalla != Pantalla.Seleccion) {
-        pantalla = if (pantalla == Pantalla.Panel) Pantalla.Seleccion else Pantalla.Panel
+        pantalla = when (pantalla) {
+            Pantalla.Panel -> Pantalla.Seleccion
+            Pantalla.Telemetria -> origenTelemetria
+            else -> Pantalla.Panel
+        }
     }
 
     Scaffold(
@@ -79,13 +93,14 @@ internal fun EnviosG1App(robotViewModel: RobotViewModel) {
             if (pantalla == Pantalla.Seleccion) {
                 PieSeleccion()
             } else {
-                val pestanaActual = if (pantalla == Pantalla.Telemetria) Pantalla.Panel else pantalla
+                val pestanaActual = if (pantalla == Pantalla.Telemetria) origenTelemetria else pantalla
                 NavegacionInferior(pestanaActual) { pantalla = it }
             }
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { espacioBarras ->
-        key(pantalla) {
+        val entregaEnMisiones = lectura.entrega.takeIf { pantalla == Pantalla.Misiones }
+        key(pantalla, entregaEnMisiones?.fase, entregaEnMisiones?.destino) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -100,17 +115,25 @@ internal fun EnviosG1App(robotViewModel: RobotViewModel) {
                     Pantalla.Seleccion -> SeleccionRobot(lectura) { pantalla = Pantalla.Panel }
                     Pantalla.Panel -> Panel(
                         lectura = lectura,
-                        alPrepararEntrega = { pantalla = Pantalla.Misiones },
-                        alVerTelemetria = { pantalla = Pantalla.Telemetria }
+                        alPrepararEntrega = {
+                            robotViewModel.enviar(ComandoRobot.NuevaEntrega)
+                            pantalla = Pantalla.Misiones
+                        },
+                        alVerTelemetria = { abrirTelemetria(Pantalla.Panel) }
                     )
                     Pantalla.Telemetria -> Telemetria(
                         lectura = lectura,
-                        alProbar = robotViewModel::probarTelemetria,
-                        alVolver = { pantalla = Pantalla.Panel }
+                        alProbar = { robotViewModel.enviar(ComandoRobot.ProbarTelemetria) },
+                        alVolver = { pantalla = origenTelemetria }
                     )
-                    Pantalla.Misiones -> Misiones()
+                    Pantalla.Misiones -> Misiones(
+                        lectura = lectura,
+                        enviar = robotViewModel::enviar,
+                        alVerTelemetria = { abrirTelemetria(Pantalla.Misiones) },
+                        alVolverAlPanel = { pantalla = Pantalla.Panel }
+                    )
                     Pantalla.Alertas -> Alertas(lectura.alertas) { pantalla = Pantalla.Panel }
-                    Pantalla.Historial -> Historial { pantalla = Pantalla.Panel }
+                    Pantalla.Historial -> Historial(lectura.ultimaEntrega) { pantalla = Pantalla.Panel }
                 }
             }
         }
@@ -263,19 +286,17 @@ private fun SeleccionRobot(lectura: TelemetriaRobot, alSeleccionar: () -> Unit) 
 }
 
 @Composable
-private fun Misiones() {
-    TituloPantalla("Elegí un destino", "Nueva misión · Desde Recepción")
-    Tarjeta(altoMinimo = 119) {
-        Text("Oficina 204", fontSize = 19.sp, fontWeight = FontWeight.Bold)
-        TextoSecundario("Piso 2 · Pasillo B")
-        Text("Ruta disponible", color = TipoAviso.Positivo.texto, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-    }
-    BotonPrincipal("Elegir Oficina 204", onClick = {}, enabled = false)
-}
-
-@Composable
-private fun Historial(alVolver: () -> Unit) {
+private fun Historial(ultimaEntrega: EntregaRegistrada?, alVolver: () -> Unit) {
     TituloPantalla("Historial", "Misiones y eventos registrados")
+    ultimaEntrega?.let { entrega ->
+        val retiro = formatearHora(entrega.retiroConfirmadoMs)
+        val regreso = formatearHora(entrega.regresoMs)
+        Aviso(
+            "${entrega.codigo} · ${entrega.destino.nombre}",
+            "Retiro confirmado a las $retiro. Regresó a Recepción a las $regreso.",
+            TipoAviso.Positivo
+        )
+    }
     Aviso("G1-023 · Oficina 201", "No retirado · Regresó a Recepción a las 13:25.", TipoAviso.Advertencia)
     BotonSecundario("Volver al panel", alVolver)
 }

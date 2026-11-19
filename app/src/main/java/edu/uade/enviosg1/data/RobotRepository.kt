@@ -16,8 +16,6 @@ internal class RobotRepositorySimulado(
     override val telemetria = simulador.telemetria
 
     override suspend fun ejecutar(comando: ComandoRobot) {
-        when (comando) {
-            ComandoRobot.ProbarTelemetria -> simulador.iniciarPrueba()
-        }
+        simulador.ejecutar(comando)
     }
 }

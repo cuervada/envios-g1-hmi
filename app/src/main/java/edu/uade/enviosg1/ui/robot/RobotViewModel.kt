@@ -18,9 +18,9 @@ internal class RobotViewModel(
         initialValue = TelemetriaRobot()
     )
 
-    fun probarTelemetria() {
+    fun enviar(comando: ComandoRobot) {
         viewModelScope.launch {
-            repositorio.ejecutar(ComandoRobot.ProbarTelemetria)
+            repositorio.ejecutar(comando)
         }
     }
 }
