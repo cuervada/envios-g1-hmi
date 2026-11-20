@@ -8,6 +8,7 @@ import edu.uade.enviosg1.model.EntregaRobot
 import edu.uade.enviosg1.model.EstadoCompartimento
 import edu.uade.enviosg1.model.EstadoOperativo
 import edu.uade.enviosg1.model.EstadoOrden
+import edu.uade.enviosg1.model.EventoHistorial
 import edu.uade.enviosg1.model.FaseEntrega
 import edu.uade.enviosg1.model.LIMITE_BATERIA_INICIO
 import edu.uade.enviosg1.model.MisionRobot
@@ -31,7 +32,7 @@ private const val LLEGADA_SEGUNDOS = 15
 private const val DURACION_PRUEBA_SEGUNDOS = 30
 private val destinoPrueba = DestinoEntrega.Oficina204
 
-private data class OrdenPendiente(
+internal data class OrdenPendiente(
     val orden: OrdenRobot,
     val recibidaMs: Long,
     val horaRecepcionMs: Long,
@@ -40,14 +41,14 @@ private data class OrdenPendiente(
     val alertasAReconocer: Set<TipoAlertaRobot> = emptySet()
 )
 
-private data class DetencionSinEntrega(
+internal data class DetencionSinEntrega(
     val ubicacion: String,
     val mision: MisionRobot?,
     val compartimento: EstadoCompartimento,
     val conPaquete: Boolean
 )
 
-private data class EstadoSimulador(
+internal data class EstadoSimulador(
     val inicioPruebaMs: Long? = null,
     val entrega: EntregaSimulada? = null,
     val ultimaEntrega: EntregaRegistrada? = null,
@@ -80,6 +81,24 @@ internal class SimuladorRobot(
     private val estado = MutableStateFlow(EstadoSimulador())
     private val bloqueoEstado = Any()
     private var ultimaLecturaRecibida: TelemetriaRobot? = null
+    private val eventosPendientes = mutableListOf<EventoHistorial>()
+
+    fun eventosPorGuardar(): List<EventoHistorial> = synchronized(bloqueoEstado) {
+        eventosPendientes.toList()
+    }
+
+    fun confirmarGuardado(identificadores: Set<String>) {
+        synchronized(bloqueoEstado) {
+            eventosPendientes.removeAll { it.identificador in identificadores }
+        }
+    }
+
+    private fun actualizarEstado(actual: EstadoSimulador, horaMs: Long) {
+        val anterior = estado.value
+        if (anterior == actual) return
+        eventosPendientes.addAll(actual.eventosDesde(anterior, horaMs))
+        estado.value = actual
+    }
 
     private val intervalos = flow {
         while (true) {
@@ -93,7 +112,7 @@ internal class SimuladorRobot(
             val ahora = relojMonotonicoMs()
             val hora = horaActualMs()
             val actual = avanzar(estado.value, ahora, hora)
-            estado.value = actual
+            actualizarEstado(actual, hora)
             val lectura = leer(actual, ahora, hora)
             if (lectura.conectado) ultimaLecturaRecibida = lectura
             lectura
@@ -105,8 +124,9 @@ internal class SimuladorRobot(
             val ahora = relojMonotonicoMs()
             val hora = horaActualMs()
             val actual = avanzar(estado.value, ahora, hora)
+            actualizarEstado(actual, hora)
             val lectura = leer(actual, ahora, hora)
-            estado.value = when {
+            val siguiente = when {
                 comando == ComandoRobot.CortarEnlace ->
                     if (lectura.conectado) cortarEnlace(actual, lectura, ultimaLecturaRecibida ?: lectura, ahora)
                     else actual
@@ -123,6 +143,7 @@ internal class SimuladorRobot(
                 actual.pendiente != null -> actual
                 else -> aplicarAccion(actual, lectura, comando, ahora, hora)
             }
+            actualizarEstado(siguiente, hora)
         }
     }
 
@@ -214,7 +235,7 @@ internal class SimuladorRobot(
         if (pendiente != null && (!esDetencion || pendiente.orden == OrdenRobot.Detener)) return estado
         val motivo = lectura.motivoBloqueo(orden)
         if (motivo != null) {
-            return estado.copy(ultimaRespuesta = RespuestaOrden(orden, EstadoOrden.Rechazada, motivo))
+            return estado.copy(ultimaRespuesta = RespuestaOrden(orden, EstadoOrden.Rechazada, motivo, horaMs))
         }
         val forzar = estado.rechazoPreparado && !esDetencion
         val alertasAReconocer = if (orden == OrdenRobot.ReconocerAlertas) {
@@ -245,7 +266,8 @@ internal class SimuladorRobot(
                 ultimaRespuesta = RespuestaOrden(
                     pendiente.orden,
                     EstadoOrden.SinRespuesta,
-                    "Venció la espera de confirmación del G1."
+                    "Venció la espera de confirmación del G1.",
+                    pendiente.horaRecepcionMs + LIMITE_RESPUESTA_MS
                 )
             )
         }
@@ -263,7 +285,7 @@ internal class SimuladorRobot(
             else -> lectura.motivoBloqueo(pendiente.orden)
         }
         val resuelto = if (motivo != null) {
-            actual.copy(ultimaRespuesta = RespuestaOrden(pendiente.orden, EstadoOrden.Rechazada, motivo))
+            actual.copy(ultimaRespuesta = RespuestaOrden(pendiente.orden, EstadoOrden.Rechazada, motivo, horaRespuesta))
         } else {
             confirmarOrden(actual, lectura, pendiente, instanteRespuesta, horaRespuesta)
         }
@@ -306,7 +328,7 @@ internal class SimuladorRobot(
             OrdenRobot.Detener -> "El G1 quedó inmóvil. Velocidad: 0,0 m/s."
             OrdenRobot.ReconocerAlertas -> "Se registró que el supervisor vio la alerta."
         }
-        return actual.copy(ultimaRespuesta = RespuestaOrden(orden, EstadoOrden.Confirmada, detalle))
+        return actual.copy(ultimaRespuesta = RespuestaOrden(orden, EstadoOrden.Confirmada, detalle, horaMs))
     }
 
     private fun detener(estado: EstadoSimulador, lectura: TelemetriaRobot, ahoraMs: Long): EstadoSimulador {
@@ -466,7 +488,7 @@ internal class SimuladorRobot(
             } else {
                 "Esperando la respuesta del G1."
             }
-            RespuestaOrden(it.orden, EstadoOrden.Pendiente, detalle)
+            RespuestaOrden(it.orden, EstadoOrden.Pendiente, detalle, it.horaRecepcionMs)
         } ?: operacion.ultimaRespuesta
         val guardada = operacion.lecturaAntesDelCorte
         if (guardada != null) {

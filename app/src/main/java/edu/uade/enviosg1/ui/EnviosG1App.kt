@@ -44,12 +44,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import edu.uade.enviosg1.model.ComandoRobot
-import edu.uade.enviosg1.model.EntregaRegistrada
 import edu.uade.enviosg1.model.EstadoOperativo
-import edu.uade.enviosg1.model.ResultadoEntrega
 import edu.uade.enviosg1.model.TelemetriaRobot
 import edu.uade.enviosg1.ui.robot.Alertas
 import edu.uade.enviosg1.ui.robot.Controles
+import edu.uade.enviosg1.ui.robot.Historial
 import edu.uade.enviosg1.ui.robot.Misiones
 import edu.uade.enviosg1.ui.robot.Panel
 import edu.uade.enviosg1.ui.robot.RobotViewModel
@@ -105,13 +104,19 @@ internal fun EnviosG1App(robotViewModel: RobotViewModel) {
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { espacioBarras ->
+        val contenido = Modifier
+            .fillMaxSize()
+            .padding(espacioBarras)
+            .consumeWindowInsets(espacioBarras)
+        if (pantalla == Pantalla.Historial) {
+            val historial by robotViewModel.historial.collectAsStateWithLifecycle()
+            Historial(historial, alVolver = { pantalla = Pantalla.Panel }, modifier = contenido)
+            return@Scaffold
+        }
         val entregaEnMisiones = lectura.entrega.takeIf { pantalla == Pantalla.Misiones }
         key(pantalla, entregaEnMisiones?.fase, entregaEnMisiones?.destino) {
             Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(espacioBarras)
-                    .consumeWindowInsets(espacioBarras)
+                modifier = contenido
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp)
                     .padding(top = if (pantalla == Pantalla.Seleccion) 30.dp else 22.dp, bottom = 20.dp),
@@ -160,7 +165,7 @@ internal fun EnviosG1App(robotViewModel: RobotViewModel) {
                         alVolverAlPanel = { pantalla = Pantalla.Panel }
                     )
                     Pantalla.Alertas -> Alertas(lectura, robotViewModel::enviar) { pantalla = Pantalla.Panel }
-                    Pantalla.Historial -> Historial(lectura.ultimaEntrega) { pantalla = Pantalla.Panel }
+                    Pantalla.Historial -> Unit
                 }
             }
         }
@@ -318,23 +323,4 @@ private fun SeleccionRobot(
             enabled = lectura.puedeProbarDesconexion
         )
     }
-}
-
-@Composable
-private fun Historial(ultimaEntrega: EntregaRegistrada?, alVolver: () -> Unit) {
-    TituloPantalla("Historial", "Misiones y eventos registrados")
-    ultimaEntrega?.let { entrega ->
-        val horaResultado = formatearHora(entrega.horaResultadoMs)
-        val retirado = entrega.resultado == ResultadoEntrega.Entregada
-        val resultado = if (retirado) "Retiro confirmado a las $horaResultado."
-            else "Plazo vencido a las $horaResultado."
-        val regreso = entrega.regresoMs?.let { " Regresó a Recepción a las " + formatearHora(it) + "." }.orEmpty()
-        Aviso(
-            "${entrega.codigo} · ${entrega.destino.nombre}",
-            "${entrega.resultado.etiqueta} · $resultado$regreso",
-            if (retirado) TipoAviso.Positivo else TipoAviso.Advertencia
-        )
-    }
-    Aviso("G1-023 · Oficina 201", "No retirado · Regresó a Recepción a las 13:25.", TipoAviso.Advertencia)
-    BotonSecundario("Volver al panel", alVolver)
 }

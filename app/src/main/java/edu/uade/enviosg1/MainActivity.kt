@@ -11,6 +11,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import edu.uade.enviosg1.data.RobotRepositorySimulado
 import edu.uade.enviosg1.data.SimuladorRobot
+import edu.uade.enviosg1.data.historial.HistorialDatabase
 import edu.uade.enviosg1.ui.EnviosG1App
 import edu.uade.enviosg1.ui.robot.RobotViewModel
 import edu.uade.enviosg1.ui.theme.EnviosG1Theme
@@ -18,7 +19,10 @@ import edu.uade.enviosg1.ui.theme.EnviosG1Theme
 class MainActivity : ComponentActivity() {
     private val robotViewModel: RobotViewModel by viewModels {
         viewModelFactory {
-            initializer { RobotViewModel(RobotRepositorySimulado(SimuladorRobot())) }
+            initializer {
+                val historialDao = HistorialDatabase.obtener(applicationContext).historialDao()
+                RobotViewModel(RobotRepositorySimulado(SimuladorRobot(), historialDao))
+            }
         }
     }
 

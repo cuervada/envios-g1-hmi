@@ -39,7 +39,8 @@ internal enum class EstadoOrden(val etiqueta: String) {
 internal data class RespuestaOrden(
     val orden: OrdenRobot,
     val estado: EstadoOrden,
-    val detalle: String
+    val detalle: String,
+    val horaMs: Long
 )
 
 internal fun TelemetriaRobot.puedeEnviar(orden: OrdenRobot): Boolean =
